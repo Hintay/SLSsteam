@@ -557,9 +557,9 @@ namespace LuaLoader {
     // The authoritative source is g_modSteamClient.path (set when steamclient.so
     // loads). steamclient.so lives at <steam_root>/ubuntu12_32/steamclient.so,
     // so we go two levels up.
-    // If the module path is not yet populated we fall back to ~/.local/share/Steam.
-    // TODO: wire the real path once g_modSteamClient is guaranteed to be set
-    //       before LuaLoader::init() is called (T9).
+    // init() is called from main.cpp load() only after g_modSteamClient.path is
+    // populated, so the primary path below is the normal case; the HOME fallback
+    // only matters if that ever changes.
     static std::string getSteamRoot() {
         // g_modSteamClient.path is a char[] set by libmem when steamclient.so loads.
         if (g_modSteamClient.path[0] != '\0') {
@@ -571,7 +571,6 @@ namespace LuaLoader {
             }
         }
         // Fallback: standard Steam install location.
-        // TODO: replace with a cleaner source of truth when available (T9).
         const char* home = std::getenv("HOME");
         if (home) {
             return std::string(home) + "/.local/share/Steam";

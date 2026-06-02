@@ -285,13 +285,12 @@ bool CConfig::loadSettings()
 				setError(ELoadError::ParsingException);
 			}
 		}
-		manifestProvider = provider;
-		if (!ManifestProvider::setProvider(provider))
+		// Only store the value if it was actually applied, so g_config.manifestProvider
+		// never diverges from ManifestProvider's active provider. setProvider already
+		// logs the rejection detail, so don't double-log here.
+		if (ManifestProvider::setProvider(provider))
 		{
-			g_pLog->warn("manifest.provider: unknown value '%s', keeping previous provider\n", provider.c_str());
-		}
-		else
-		{
+			manifestProvider = provider;
 			g_pLog->info("manifest.provider: %s\n", provider.c_str());
 		}
 	}
@@ -316,7 +315,10 @@ bool CConfig::loadSettings()
 			}
 		}
 		luaPaths = paths;
-		g_pLog->info("lua.paths: %zu extra dir(s) configured\n", paths.size());
+		if (!paths.empty())
+		{
+			g_pLog->info("lua.paths: %zu extra dir(s) configured\n", paths.size());
+		}
 	}
 
 	switch(__loadErrors.get())

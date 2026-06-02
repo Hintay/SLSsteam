@@ -7,8 +7,8 @@
 // Mirrors OST ManifestClient.cpp / kProviders model.
 // Default provider: "wudrm".
 //
-// YAML wiring (selecting provider by name from config) is handled in T9;
-// for now consumers call setProvider() directly or rely on the default.
+// The provider is selected from yaml `manifest.provider` in config.cpp:loadSettings();
+// call setProvider() directly to override at runtime.
 namespace ManifestProvider
 {
     // Switch the active provider by name ("wudrm", "steamrun").
