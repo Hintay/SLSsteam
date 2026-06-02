@@ -19,6 +19,7 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -35,6 +36,11 @@ namespace LuaLoader {
 
     // ── Internal state ─────────────────────────────────────────────────────
     static lua_State* g_lua = nullptr;
+    // The lua_State is not thread-safe. init() runs single-threaded at startup,
+    // but fetchManifestCode runs the lua provider callbacks from std::async
+    // workers (one per concurrent depot), so all g_lua access from there is
+    // serialized under this mutex.
+    static std::mutex g_luaMtx;
 
     // Case-insensitive function registry: lowercase name → C function.
     // Mirrors OST LuaConfig.cpp:g_func_registry.
@@ -715,6 +721,9 @@ namespace LuaLoader {
             return false;
         }
 
+        // Hold g_luaMtx across both lua-provider branches (released before the
+        // HTTP fallback). RAII also releases it when a branch returns a hit.
+        std::unique_lock<std::mutex> luaLk(g_luaMtx);
         const int topBefore = lua_gettop(g_lua);
 
         // ── Branch 1: fetch_manifest_code_ex(appId, depotId, gid) ────────
@@ -765,6 +774,10 @@ namespace LuaLoader {
                 g_pLog->warn("LuaLoader: fetch_manifest_code returned nil/0, falling back to provider\n");
             }
         }
+
+        // Release the lua lock before the slow, lua-free HTTP provider call so
+        // it doesn't block other concurrent fetches' lua access.
+        luaLk.unlock();
 
         // ── Branch 3: built-in HTTP provider ─────────────────────────────
         g_pLog->info("LuaLoader: fetchManifestCode gid=%llu falling back to provider '%s'\n",

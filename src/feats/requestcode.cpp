@@ -63,7 +63,7 @@ namespace RequestCode
 		}
 
 		const auto body = msg->getBody<CContentServerDirectory_GetManifestRequestCode_Request>();
-		if (!body->has_depot_id() || !body->has_manifest_id())
+		if (!body->has_app_id() || !body->has_depot_id() || !body->has_manifest_id())
 		{
 			return;
 		}
