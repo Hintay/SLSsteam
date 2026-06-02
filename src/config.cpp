@@ -3,6 +3,7 @@
 #include "config_default.hpp"
 #include "filewatcher.hpp"
 #include "log.hpp"
+#include "lua/ManifestProvider.hpp"
 #include "yaml-cpp/yaml.h"
 
 #include <cmath>
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 
 std::string CConfig::getDir()
@@ -265,6 +267,56 @@ bool CConfig::loadSettings()
 	{
 		//g_pLog->notify("Missing DenuvoGames entry in config!");
 		setError(ELoadError::MissingKey);
+	}
+
+	// manifest.provider — optional nested section; default "wudrm" if missing.
+	// Calls ManifestProvider::setProvider() so the HTTP fallback uses the right URL.
+	{
+		const auto manifestNode = node["manifest"];
+		std::string provider = "wudrm";
+		if (manifestNode && manifestNode["provider"])
+		{
+			try
+			{
+				provider = manifestNode["provider"].as<std::string>();
+			}
+			catch (...)
+			{
+				setError(ELoadError::ParsingException);
+			}
+		}
+		manifestProvider = provider;
+		if (!ManifestProvider::setProvider(provider))
+		{
+			g_pLog->warn("manifest.provider: unknown value '%s', keeping previous provider\n", provider.c_str());
+		}
+		else
+		{
+			g_pLog->info("manifest.provider: %s\n", provider.c_str());
+		}
+	}
+
+	// lua.paths — optional list of extra directories to scan for .lua plugin files.
+	// Missing or empty section is silently ignored (no setError — it is optional).
+	{
+		const auto luaNode = node["lua"];
+		std::vector<std::string> paths;
+		if (luaNode && luaNode["paths"])
+		{
+			for (const auto& entry : luaNode["paths"])
+			{
+				try
+				{
+					paths.push_back(entry.as<std::string>());
+				}
+				catch (...)
+				{
+					setError(ELoadError::ParsingException);
+				}
+			}
+		}
+		luaPaths = paths;
+		g_pLog->info("lua.paths: %zu extra dir(s) configured\n", paths.size());
 	}
 
 	switch(__loadErrors.get())

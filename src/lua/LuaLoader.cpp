@@ -674,9 +674,15 @@ namespace LuaLoader {
             scanDirectory(userLuaDir);
         }
 
-        // 3. Extra directories from yaml lua.paths[] — stubbed empty for T1;
-        //    full YAML wiring is a later task.
-        // TODO (T_yaml): read g_config yaml node "lua.paths" and scan each.
+        // 3. Extra directories from yaml lua.paths[] — wired in T9.
+        //    These are scanned after the built-in dirs so they can override entries.
+        {
+            const auto extraDirs = g_config.luaPaths.get();
+            for (const auto& dir : extraDirs)
+            {
+                scanDirectory(dir);
+            }
+        }
 
         // ── Union lua tables into g_config ────────────────────────────────
         mergeIntoConfig();

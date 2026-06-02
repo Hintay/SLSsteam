@@ -3,6 +3,7 @@
 #include "globals.hpp"
 #include "hooks.hpp"
 #include "log.hpp"
+#include "lua/LuaLoader.hpp"
 #include "patterns.hpp"
 #include "update.hpp"
 #include "utils.hpp"
@@ -186,6 +187,13 @@ static void load()
 			g_pLog->warn("steamclient.so hash missmatch! Please update :)");
 		}
 	}
+
+	// Initialize the Lua VM and execute all .lua plugin files.
+	// Called here — after g_modSteamClient.path is populated (needed by getSteamRoot)
+	// and after g_config is loaded (lua.paths and manifest.provider are already parsed).
+	// Hook bindings read the lua tables lazily at call-time, so this call just needs
+	// to happen before any hook fires (i.e. before Hooks::setup installs trampolines).
+	LuaLoader::init();
 
 	if (!Patterns::init())
 	{

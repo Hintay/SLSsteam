@@ -13,6 +13,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 
 class CFileWatcher;
@@ -68,6 +69,14 @@ public:
 	MTVariable<int32_t> fakeWalletBalance;
 	MTVariable<unsigned int> logLevel;
 	MTVariable<bool> extendedLogging;
+
+	// manifest.provider: selects the built-in HTTP provider for manifest code lookup.
+	// Default: "wudrm". Passed to ManifestProvider::setProvider() after load.
+	MTVariable<std::string> manifestProvider;
+
+	// lua.paths: optional list of extra directories to scan for .lua plugin files.
+	// These are scanned after the built-in steam-root and user-config dirs.
+	MTVariable<std::vector<std::string>> luaPaths;
 
 	//Using incomplete class to avoid runtime linking errors
 	CFileWatcher* watcher;
