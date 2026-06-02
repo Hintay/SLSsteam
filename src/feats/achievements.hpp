@@ -17,7 +17,9 @@ namespace Achievements
 	// CMsgClientGetUserStatsResponse messages (EMsg 819) for controlled apps,
 	// clearing stats/achievements and forcing eresult = OK so Steam reads from
 	// its local cache instead of overwriting it with the target account's data.
-	void recvMessage(const CProtoBufMsgBase* msg);
+	// Non-const: this mutates msg->header / the body, matching the other recv
+	// feats (Ticket::recvMsg, Misc::recvMsg, RequestCode::recvMsg).
+	void recvMessage(CProtoBufMsgBase* msg);
 
 	// Called from hkCAPIJob_GetPlayerStats. Previously forced NO_CONNECTION to
 	// block live stats; now a no-op since the network hooks handle redirection.

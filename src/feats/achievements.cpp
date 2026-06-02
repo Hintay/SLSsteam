@@ -40,6 +40,8 @@ namespace Achievements
 
 		// jobid_source (outgoing call) -> appId for pending ServiceMethod requests.
 		// Protected by g_mutex; accessed from the Send hook and the InitFromPacket hook.
+		// Bounded by the number of controlled apps; an orphaned entry (151 sent but
+		// no 147 ever returns) is benign — at most one per app per session.
 		std::unordered_map<uint64_t, uint32_t> g_pending;
 		std::mutex g_mutex;
 
@@ -123,6 +125,7 @@ namespace Achievements
 				return;
 			}
 
+			// game_id upper 32 bits = game type; low 32 bits = appId (same as OST).
 			const uint32_t appId = static_cast<uint32_t>(body->game_id());
 			if (!isControlled(appId))
 			{
@@ -143,7 +146,7 @@ namespace Achievements
 
 	// ── Incoming hook ────────────────────────────────────────────────────────
 
-	void recvMessage(const CProtoBufMsgBase* msg)
+	void recvMessage(CProtoBufMsgBase* msg)
 	{
 		if (!msg)
 		{
@@ -193,6 +196,7 @@ namespace Achievements
 				return;
 			}
 
+			// game_id upper 32 bits = game type; low 32 bits = appId (same as OST).
 			const uint32_t appId = static_cast<uint32_t>(body->game_id());
 			if (!isControlled(appId))
 			{
