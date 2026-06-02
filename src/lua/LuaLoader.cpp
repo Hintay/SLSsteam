@@ -4,6 +4,7 @@
 #include "../curl.hpp"
 #include "../globals.hpp"
 #include "../log.hpp"
+#include "ManifestProvider.hpp"
 
 // Use the raw Lua C API — same approach as OST's LuaConfig.cpp.
 // Do NOT use sol2 or any wrapper.
@@ -276,19 +277,44 @@ namespace LuaLoader {
         return 0;
     }
 
-    // http_get(url) → (body: string, status: integer)
-    // Wraps Curl::getString which performs a GET and returns a CURLcode.
-    // On success: pushes (body_string, 0). On failure: pushes (nil, error_code).
+    // Parse an optional Lua table at stack index idx into a headers vector.
+    // Table format: { ["Header-Name"] = "value", ... }
+    // Non-string keys/values are silently skipped.
+    static std::vector<std::pair<std::string, std::string>>
+    parseHeadersTable(lua_State* L, int idx)
+    {
+        std::vector<std::pair<std::string, std::string>> hdrs;
+        if (idx < 1 || idx > lua_gettop(L) || !lua_istable(L, idx))
+            return hdrs;
+
+        lua_pushnil(L); // first key
+        while (lua_next(L, idx) != 0) {
+            // key at -2, value at -1
+            if (lua_isstring(L, -2) && lua_isstring(L, -1)) {
+                hdrs.emplace_back(lua_tostring(L, -2), lua_tostring(L, -1));
+            }
+            lua_pop(L, 1); // pop value, keep key for next iteration
+        }
+        return hdrs;
+    }
+
+    // http_get(url [, headers_table]) → (body: string, status: integer)
+    // On success: (body, http_status_code).  On transport error: (nil, curlcode).
     static int impl_http_get(lua_State* L) {
         if (lua_gettop(L) < 1 || !lua_isstring(L, 1))
             return luaL_error(L, "http_get: arg1 must be URL string");
 
         const char* url = lua_tostring(L, 1);
+        auto hdrs = parseHeadersTable(L, 2);
+
         std::string body;
-        int rc = Curl::getString(url, body);
+        long   status = 0;
+        static const std::string noBody;
+        int rc = Curl::request("GET", url, hdrs, noBody, body, status);
+
         if (rc == 0 /* CURLE_OK */) {
             lua_pushlstring(L, body.data(), body.size());
-            lua_pushinteger(L, 0);
+            lua_pushinteger(L, static_cast<lua_Integer>(status));
         } else {
             lua_pushnil(L);
             lua_pushinteger(L, rc);
@@ -297,13 +323,32 @@ namespace LuaLoader {
     }
 
     // http_post(url, body [, headers_table]) → (response: string|nil, status: integer)
-    // Contract mirrors http_get: on failure returns (nil, int_status).
-    // TODO (T6): full POST support and custom headers require extending Curl::getString.
+    // On success: (body, http_status_code).  On transport error: (nil, curlcode).
     static int impl_http_post(lua_State* L) {
-        // TODO (T6): implement POST with body and optional headers table once
-        // Curl is extended with curl_easy_setopt(CURLOPT_POST/CURLOPT_POSTFIELDS).
-        lua_pushnil(L);
-        lua_pushinteger(L, -1); // -1 signals "not implemented"; matches (nil, int) shape of http_get
+        int argc = lua_gettop(L);
+        if (argc < 1 || !lua_isstring(L, 1))
+            return luaL_error(L, "http_post: arg1 must be URL string");
+        if (argc < 2 || !lua_isstring(L, 2))
+            return luaL_error(L, "http_post: arg2 must be body string");
+
+        const char* url = lua_tostring(L, 1);
+        size_t bodyLen  = 0;
+        const char* bodyPtr = lua_tolstring(L, 2, &bodyLen);
+        std::string postBody(bodyPtr, bodyLen);
+
+        auto hdrs = parseHeadersTable(L, 3);
+
+        std::string response;
+        long   status = 0;
+        int rc = Curl::request("POST", url, hdrs, postBody, response, status);
+
+        if (rc == 0 /* CURLE_OK */) {
+            lua_pushlstring(L, response.data(), response.size());
+            lua_pushinteger(L, static_cast<lua_Integer>(status));
+        } else {
+            lua_pushnil(L);
+            lua_pushinteger(L, rc);
+        }
         return 2;
     }
 
@@ -507,6 +552,106 @@ namespace LuaLoader {
         auto it = statSteamIds.find(appId);
         if (it == statSteamIds.end()) return kDefaultStatSteamId;
         return it->second;
+    }
+
+    // ── fetchManifestCode ─────────────────────────────────────────────────
+    // Mirrors OST ManifestClient::FetchManifestRequestCode selection order.
+
+    // Helper: read the top Lua value as a non-zero uint64.
+    // Accepts integers and decimal strings (Lua scripts may return either).
+    // Returns false if the value is nil, zero, or unparseable.
+    static bool readU64FromTop(lua_State* L, uint64_t& out)
+    {
+        if (lua_isnil(L, -1)) return false;
+
+        if (lua_isinteger(L, -1)) {
+            lua_Integer v = lua_tointeger(L, -1);
+            if (v <= 0) return false;
+            out = static_cast<uint64_t>(v);
+            return true;
+        }
+        if (lua_isnumber(L, -1)) {
+            // Lua numbers may lose precision for large u64, but tolerate the path.
+            double d = lua_tonumber(L, -1);
+            if (d <= 0) return false;
+            out = static_cast<uint64_t>(d);
+            return (out != 0);
+        }
+        if (lua_isstring(L, -1)) {
+            const char* s = lua_tostring(L, -1);
+            errno = 0;
+            char* end = nullptr;
+            unsigned long long v = strtoull(s, &end, 10);
+            if (errno != 0 || end == s || *end != '\0' || v == 0) return false;
+            out = static_cast<uint64_t>(v);
+            return true;
+        }
+        return false;
+    }
+
+    bool fetchManifestCode(uint32_t appId, uint32_t depotId, uint64_t gid, uint64_t& outCode)
+    {
+        if (!g_lua) {
+            g_pLog->warn("LuaLoader: fetchManifestCode called before init()\n");
+            return false;
+        }
+
+        const int topBefore = lua_gettop(g_lua);
+
+        // ── Branch 1: fetch_manifest_code_ex(appId, depotId, gid) ────────
+        if (g_fetchCodeExRef != LUA_NOREF) {
+            lua_rawgeti(g_lua, LUA_REGISTRYINDEX, g_fetchCodeExRef);
+            lua_pushinteger(g_lua, static_cast<lua_Integer>(appId));
+            lua_pushinteger(g_lua, static_cast<lua_Integer>(depotId));
+            lua_pushinteger(g_lua, static_cast<lua_Integer>(gid));
+
+            if (lua_pcall(g_lua, 3, 1, 0) != LUA_OK) {
+                g_pLog->warn("LuaLoader: fetch_manifest_code_ex error: %s\n",
+                             lua_tostring(g_lua, -1));
+                lua_settop(g_lua, topBefore);
+                // Fall through to branch 2 / provider on pcall failure.
+            } else {
+                uint64_t code = 0;
+                bool ok = readU64FromTop(g_lua, code);
+                lua_settop(g_lua, topBefore);
+                if (ok) {
+                    g_pLog->info("LuaLoader: fetchManifestCode gid=%llu via fetch_manifest_code_ex\n",
+                                 static_cast<unsigned long long>(gid));
+                    outCode = code;
+                    return true;
+                }
+                g_pLog->warn("LuaLoader: fetch_manifest_code_ex returned nil/0, trying fetch_manifest_code\n");
+            }
+        }
+
+        // ── Branch 2: fetch_manifest_code(gid) ───────────────────────────
+        if (g_fetchCodeRef != LUA_NOREF) {
+            lua_rawgeti(g_lua, LUA_REGISTRYINDEX, g_fetchCodeRef);
+            lua_pushinteger(g_lua, static_cast<lua_Integer>(gid));
+
+            if (lua_pcall(g_lua, 1, 1, 0) != LUA_OK) {
+                g_pLog->warn("LuaLoader: fetch_manifest_code error: %s\n",
+                             lua_tostring(g_lua, -1));
+                lua_settop(g_lua, topBefore);
+            } else {
+                uint64_t code = 0;
+                bool ok = readU64FromTop(g_lua, code);
+                lua_settop(g_lua, topBefore);
+                if (ok) {
+                    g_pLog->info("LuaLoader: fetchManifestCode gid=%llu via fetch_manifest_code\n",
+                                 static_cast<unsigned long long>(gid));
+                    outCode = code;
+                    return true;
+                }
+                g_pLog->warn("LuaLoader: fetch_manifest_code returned nil/0, falling back to provider\n");
+            }
+        }
+
+        // ── Branch 3: built-in HTTP provider ─────────────────────────────
+        g_pLog->info("LuaLoader: fetchManifestCode gid=%llu falling back to provider '%s'\n",
+                     static_cast<unsigned long long>(gid),
+                     ManifestProvider::activeProviderName());
+        return ManifestProvider::fetchFromProvider(gid, outCode);
     }
 
 } // namespace LuaLoader

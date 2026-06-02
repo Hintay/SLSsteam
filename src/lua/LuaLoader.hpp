@@ -54,4 +54,12 @@ namespace LuaLoader {
     // Falls back to 76561198028121353 when not set.
     uint64_t getStatSteamId(uint32_t appId);
 
+    // Fetch the manifest request code for (appId, depotId, gid).
+    // Selection order (mirrors OST FetchManifestRequestCode):
+    //   1. g_fetchCodeExRef != LUA_NOREF  → call fetch_manifest_code_ex(appId, depotId, gid)
+    //   2. g_fetchCodeRef   != LUA_NOREF  → call fetch_manifest_code(gid)
+    //   3. fallback                        → ManifestProvider::fetchFromProvider(gid, outCode)
+    // Returns true and writes outCode on success; outCode is validated non-zero.
+    bool fetchManifestCode(uint32_t appId, uint32_t depotId, uint64_t gid, uint64_t& outCode);
+
 } // namespace LuaLoader
