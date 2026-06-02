@@ -473,8 +473,43 @@ namespace LuaLoader {
         return 0;
     }
 
-    // ── Stub binding implementations (T8/T9 — do not implement here) ─────
-    static int stub_setstat(lua_State*)                    { return 0; }
+    // ── setstat real implementation (T8) ─────────────────────────────────
+
+    // setstat(appid, "steamid_decimal")
+    // Associates a 64-bit Steam ID with an app so that Achievements::sendMessage
+    // redirects Player.GetUserStats / CMsgClientGetUserStats queries for that app
+    // to the given Steam ID. Mirrors OST LuaConfig.cpp::lua_setstat.
+    //
+    // Arg 1 (required): integer appId
+    // Arg 2 (required): decimal uint64 string Steam ID (e.g. "76561198028121353")
+    //
+    // On success: inserts or overwrites statSteamIds[appId].
+    static int impl_setstat(lua_State* L) {
+        int argc = lua_gettop(L);
+        if (argc < 2)
+            return luaL_error(L, "setstat: need appid and steamid string");
+        if (!lua_isinteger(L, 1))
+            return luaL_error(L, "setstat: arg1 (appid) must be integer");
+        if (!lua_isstring(L, 2))
+            return luaL_error(L, "setstat: arg2 (steamid) must be decimal string");
+
+        lua_Integer raw = lua_tointeger(L, 1);
+        if (raw < 0 || raw > static_cast<lua_Integer>(UINT32_MAX))
+            return luaL_error(L, "setstat: appid out of uint32 range");
+        uint32_t appId = static_cast<uint32_t>(raw);
+
+        const char* sidStr = lua_tostring(L, 2);
+        uint64_t steamId = 0;
+        if (!parseU64Decimal(sidStr, steamId))
+            return luaL_error(L, "setstat: arg2 is not a valid uint64 decimal string");
+
+        statSteamIds[appId] = steamId;
+        g_pLog->debug("LuaLoader: setstat(%u, steamid=%llu)\n",
+                      appId, static_cast<unsigned long long>(steamId));
+        return 0;
+    }
+
+    // ── Stub binding implementations (T9 — do not implement here) ─────
     static int stub_downloadapp(lua_State*)                { return 0; }
     static int stub_addnonowneddepot(lua_State*)           { return 0; }
     static int stub_setnotifyondownloadcomplete(lua_State*) { return 0; }
@@ -603,8 +638,8 @@ namespace LuaLoader {
         lua_setmetatable(g_lua, -2);
         lua_pop(g_lua, 1); // Pop _G.
 
-        // Register all bindings. T2 and T6 functions are real (http_post implemented);
-        // T7/T8 (tickets/stat) bindings remain stubs.
+        // Register all bindings. T2, T6, T7 and T8 functions are real;
+        // T9 (downloadapp/addnonowneddepot/setnotifyondownloadcomplete/setstpropertyforaccount) remain stubs.
         register_func(g_lua, "addappid",                    impl_addappid);
         register_func(g_lua, "addtoken",                    impl_addtoken);
         register_func(g_lua, "setmanifestid",               impl_setmanifestid);
@@ -614,7 +649,7 @@ namespace LuaLoader {
         register_func(g_lua, "http_post",                   impl_http_post);
         register_func(g_lua, "setappticket",                impl_setappticket);
         register_func(g_lua, "seteticket",                  impl_seteticket);
-        register_func(g_lua, "setstat",                     stub_setstat);
+        register_func(g_lua, "setstat",                     impl_setstat);
         register_func(g_lua, "downloadapp",                 stub_downloadapp);
         register_func(g_lua, "addnonowneddepot",            stub_addnonowneddepot);
         register_func(g_lua, "setnotifyondownloadcomplete", stub_setnotifyondownloadcomplete);

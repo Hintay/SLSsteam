@@ -16,7 +16,8 @@ enum EMsgType : uint16_t
 	EMSG_SERVICE_METHOD_CALL_FROM_CLIENT = 151,    //k_EMsgServiceMethodCallFromClient (outgoing ServiceMethod call)
 	EMSG_GAMESPLAYED_NO_DATABLOB = 715,
 	EMSG_GAMESPLAYED = 742,
-	EMSG_REQUEST_USERSTATS_RESPONSE = 819,
+	EMSG_REQUEST_USERSTATS = 818,                  //k_EMsgClientGetUserStats (outgoing client stats request)
+	EMSG_REQUEST_USERSTATS_RESPONSE = 819,         //k_EMsgClientGetUserStatsResponse (incoming client stats response)
 	EMSG_APPOWNERSHIPTICKET_RESPONSE = 858,
 	EMSG_ENCRYPTED_APPTICKET_RESPONSE = 5527,
 	EMSG_WALLET_INFO_UPDATE = 5528,

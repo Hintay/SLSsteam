@@ -234,6 +234,7 @@ static void hkProtoBufMsgBase_InitFromPacket(CProtoBufMsgBase* pMsg, void* pSrc)
 
 static uint32_t hkProtoBufMsgBase_Send(CProtoBufMsgBase* pMsg)
 {
+	Achievements::sendMessage(pMsg);
 	Apps::sendMsg(pMsg);
 	FakeAppIds::sendMsg(pMsg);
 	RequestCode::sendMsg(pMsg);
