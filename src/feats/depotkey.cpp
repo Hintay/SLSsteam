@@ -19,6 +19,15 @@ bool DepotKey::provideKey(uint32_t depotId, void* outBuf)
 		return false;
 	}
 
+	// Defensive: only inject a correctly-sized key. parseHex64 already enforces
+	// exactly 32 bytes, but guard here so this memory-writing path does not rely
+	// on an invariant enforced in another layer; fall through to the original
+	// loader on any mismatch.
+	if (key->size() != kDepotKeySize)
+	{
+		return false;
+	}
+
 	// arg3 is a pointer-to-pointer: dereference once to reach the buffer the
 	// loader expects the key to land in, then write the key at offset 0.
 	void* dst = *reinterpret_cast<void**>(outBuf);
