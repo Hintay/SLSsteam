@@ -1,6 +1,8 @@
 #include "achievements.hpp"
 
 #include "../sdk/CProtoBufMsgBase.hpp"
+#include "../sdk/CSteamEngine.hpp"
+#include "../sdk/CUser.hpp"
 #include "../sdk/EResult.hpp"
 #include "../sdk/protobufs/slssteam_servicemethods.pb.h"
 #include "../sdk/protobufs/steammessages_clientserver_userstats.pb.h"
@@ -19,18 +21,20 @@
 //   1. ServiceMethod (EMsg 151/147): Player.GetUserStats#1
 //   2. Legacy client message (EMsg 818/819): CMsgClientGetUserStats
 //
-// For apps in g_config.addedAppIds (the "controlled" set, populated from both
-// YAML addedAppIds and Lua addappid() calls), we redirect the stats query to a
-// configurable Steam ID so that the target account's achievements are fetched
-// instead of the signed-in account's. The response is then cleared so Steam
-// falls back to its local cache — the same as OST's approach.
+// For a controlled app the user does NOT genuinely own, we redirect the stats
+// query to a configurable donor Steam ID so the donor account's achievements
+// are fetched instead of the signed-in account's. The response is then cleared
+// so Steam falls back to its local cache — the same as OST's approach.
 //
-// Controlled-app gate: g_config.isAddedAppId(appId) — chosen because:
-//   - It covers both YAML addedAppIds and Lua ownedAppIds (merged at init).
-//   - It matches the gate used by Apps::checkAppOwnership and DLC hooks, so
-//     the definition of "this app is managed by SLSsteam" is consistent.
-//   - LuaLoader::statSteamIds membership alone would be too narrow; many scripts
-//     may omit setstat() and still expect stats to be redirected.
+// Redirect gate: shouldRedirectStats(appId) = isAddedAppId(appId) && !isSubscribed(appId)
+//   - isAddedAppId covers both YAML addedAppIds and Lua ownedAppIds (merged at
+//     init) — the "this app is managed by SLSsteam" set, consistent with the
+//     gate used by Apps::checkAppOwnership and the DLC hooks.
+//   - The added !isSubscribed() term excludes apps the user genuinely owns:
+//     OST redirects every configured app unconditionally, but for a genuinely
+//     owned app the real account already has valid achievements, so pulling a
+//     donor's data would clobber them. Non-owned controlled apps still follow
+//     OST's donor-redirect behaviour (donor = setstat() override, else default).
 namespace Achievements
 {
 	namespace
@@ -49,6 +53,19 @@ namespace Achievements
 		inline bool isControlled(uint32_t appId)
 		{
 			return g_config.isAddedAppId(appId);
+		}
+
+		// Returns true if a stats query for appId should be redirected to the
+		// configured donor SteamID. We only redirect apps the user does NOT
+		// genuinely own: for a genuinely-owned app (isSubscribed true) the real
+		// account already has valid achievements, so pulling a stranger's data
+		// would clobber them. Non-owned controlled apps still follow OST's
+		// donor-redirect behaviour. isSubscribed is the same genuine-ownership
+		// oracle used by Apps/DLC/FakeAppIds and is not spoofed for added apps.
+		inline bool shouldRedirectStats(uint32_t appId)
+		{
+			return isControlled(appId) &&
+			       !g_pSteamEngine->getUser(0)->isSubscribed(appId);
 		}
 	}
 
@@ -76,7 +93,7 @@ namespace Achievements
 				}
 
 				const uint32_t appId = body->appid();
-				if (!isControlled(appId))
+				if (!shouldRedirectStats(appId))
 				{
 					return;
 				}
@@ -127,7 +144,7 @@ namespace Achievements
 
 			// game_id upper 32 bits = game type; low 32 bits = appId (same as OST).
 			const uint32_t appId = static_cast<uint32_t>(body->game_id());
-			if (!isControlled(appId))
+			if (!shouldRedirectStats(appId))
 			{
 				return;
 			}
@@ -198,7 +215,7 @@ namespace Achievements
 
 			// game_id upper 32 bits = game type; low 32 bits = appId (same as OST).
 			const uint32_t appId = static_cast<uint32_t>(body->game_id());
-			if (!isControlled(appId))
+			if (!shouldRedirectStats(appId))
 			{
 				return;
 			}

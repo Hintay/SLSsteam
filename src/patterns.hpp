@@ -31,7 +31,7 @@ namespace Patterns
 	extern Pattern_t FamilyGroupRunningApp;
 	extern Pattern_t StopPlayingBorrowedApp;
 
-	extern Pattern_t GetDepotDecryptionKey;
+	extern Pattern_t LoadDepotDecryptionKey;
 	extern Pattern_t BuildDepotDependency;
 
 	extern Pattern_t TraceIPC;

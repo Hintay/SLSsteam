@@ -29,11 +29,13 @@
 
 #include "libmem/libmem.h"
 
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <system_error>
 #include <pthread.h>
 #include <strings.h>
 #include <unistd.h>
@@ -169,17 +171,39 @@ static void hkTraceIPC(const char* iface, const char* fn)
 	}
 }
 
-static int hkGetDepotDecryptionKey(void* pObject, uint32_t depotId, void* outBuf)
+static int hkLoadDepotDecryptionKey(void* pObject, uint32_t foo, char* KeyName, char* Key, uint32_t KeySize)
 {
-	// Inject a Lua-provided key when available; outBuf is a pointer-to-pointer
-	// whose target buffer receives the 32-byte key. Returns 1 like the original
-	// loader does on success. Falls through to the real loader otherwise.
-	if (DepotKey::provideKey(depotId, outBuf))
+	// Generic KV value reader: Steam calls it for many keys, so only act on a
+	// depot decryption-key read and fall through for everything else. KeyName is
+	// "Software\\Valve\\Steam\\Depots\\<depotId>\\DecryptionKey"; Key is a direct
+	// output buffer of KeySize bytes (observed 128) and the function returns the
+	// number of bytes written. This is the function OST hooks (Hooks_Decryption).
+	if (KeyName)
 	{
-		return 1;
+		const char* tag = strstr(KeyName, "\\DecryptionKey");
+		if (tag && tag > KeyName)
+		{
+			// [idStart, tag) spans the decimal <depotId> between two backslashes.
+			const char* idStart = tag;
+			while (idStart > KeyName && idStart[-1] != '\\')
+			{
+				--idStart;
+			}
+
+			uint32_t depotId = 0;
+			const auto [end, ec] = std::from_chars(idStart, tag, depotId);
+			if (ec == std::errc{} && end == tag)
+			{
+				const int written = DepotKey::provideKey(depotId, Key, KeySize);
+				if (written > 0)
+				{
+					return written;
+				}
+			}
+		}
 	}
 
-	return Hooks::GetDepotDecryptionKey.tramp.fn(pObject, depotId, outBuf);
+	return Hooks::LoadDepotDecryptionKey.tramp.fn(pObject, foo, KeyName, Key, KeySize);
 }
 
 static bool hkBuildDepotDependency(void* pUserAppMgr, uint32_t appId, void* pUserConfig, void* pDepotInfo, void* pSharedDepotInfo, void* pSteamApp, uint32_t* pBuildId, bool* pbBetaFallback)
@@ -780,11 +804,16 @@ static uint32_t hkClientUser_GetSteamId(uint32_t steamId)
 	{
 		steamId = ticket.steamId;
 	}
-	else if (Ticket::oneTimeSteamIdSpoof)
+	else
 	{
-		//One time spoof should be enough for this type
-		steamId = Ticket::oneTimeSteamIdSpoof;
-		Ticket::oneTimeSteamIdSpoof = 0;
+		//One time spoof should be enough for this type. Atomic read-and-clear so
+		//a concurrent GetSteamId/GetAppOwnershipTicketExtendedData on another
+		//thread cannot tear or lose the value.
+		const uint32_t spoof = Ticket::oneTimeSteamIdSpoof.exchange(0);
+		if (spoof)
+		{
+			steamId = spoof;
+		}
 	}
 
 	return steamId;
@@ -976,7 +1005,7 @@ namespace Hooks
 	DetourHook<IClientUser_RunIPCFrame_t> IClientUser_RunIPCFrame;
 	DetourHook<IClientUserStats_RunIPCFrame_t> IClientUserStats_RunIPCFrame;
 
-	DetourHook<GetDepotDecryptionKey_t> GetDepotDecryptionKey;
+	DetourHook<LoadDepotDecryptionKey_t> LoadDepotDecryptionKey;
 	DetourHook<BuildDepotDependency_t> BuildDepotDependency;
 
 	DetourHook<CAPIJob_GetPlayerStats_t> CAPIJob_GetPlayerStats;
@@ -1032,7 +1061,7 @@ bool Hooks::setup()
 	bool succeeded =
 		TraceIPC.setup(Patterns::TraceIPC, &hkTraceIPC)
 
-		&& GetDepotDecryptionKey.setup(Patterns::GetDepotDecryptionKey, &hkGetDepotDecryptionKey)
+		&& LoadDepotDecryptionKey.setup(Patterns::LoadDepotDecryptionKey, &hkLoadDepotDecryptionKey)
 		&& BuildDepotDependency.setup(Patterns::BuildDepotDependency, &hkBuildDepotDependency)
 
 		&& CAPIJob_GetPlayerStats.setup(Patterns::CAPIJob::GetPlayerStats, &hkCAPIJob_GetPlayerStats)
@@ -1083,7 +1112,7 @@ void Hooks::place()
 	//Detours
 	TraceIPC.place();
 
-	GetDepotDecryptionKey.place();
+	LoadDepotDecryptionKey.place();
 	BuildDepotDependency.place();
 
 	CAPIJob_GetPlayerStats.place();
@@ -1126,7 +1155,7 @@ void Hooks::remove()
 	//Detours
 	TraceIPC.remove();
 
-	GetDepotDecryptionKey.remove();
+	LoadDepotDecryptionKey.remove();
 	BuildDepotDependency.remove();
 
 	CAPIJob_GetPlayerStats.remove();

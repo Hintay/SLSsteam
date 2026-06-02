@@ -6,9 +6,9 @@
 namespace DepotKey
 {
 	// Tries to satisfy a depot decryption key request from the Lua layer.
-	// On success, copies the 32-byte key into the loader's output buffer and
-	// returns true; the caller then short-circuits the original loader.
-	// outBuf is the original arg3: a pointer-to-pointer whose target buffer
-	// receives the key at offset 0.
-	bool provideKey(uint32_t depotId, void* outBuf);
+	// LoadDepotDecryptionKey passes Key as a direct output buffer of outSize
+	// bytes and expects the number of bytes written as the return value. On a
+	// Lua hit this copies the 32-byte key into outBuf and returns 32; otherwise
+	// it returns 0 so the caller falls through to the real loader.
+	int provideKey(uint32_t depotId, void* outBuf, uint32_t outSize);
 }

@@ -40,6 +40,11 @@ namespace LuaLoader {
     // here, never lua_close()'d; it lives until the injected process exits.
     void init();
 
+    // True once init() has finished building all lua tables. The FileWatcher
+    // hot-reload path (CConfig::loadSettings) checks this before calling
+    // mergeIntoConfig() so it never races init()'s table construction.
+    bool initDone();
+
     // Union the lua-provided ownedAppIds/appTokens into g_config. Called by init()
     // and again at the end of CConfig::loadSettings() so a yaml hot-reload (which
     // overwrites those fields wholesale) does not drop lua-defined apps. Safe to

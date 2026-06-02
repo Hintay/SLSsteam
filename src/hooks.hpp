@@ -80,7 +80,9 @@ namespace Hooks
 	typedef void(*IClientUser_RunIPCFrame_t)(void*, void*, void*, void*);
 	typedef void(*IClientUserStats_RunIPCFrame_t)(void*, void*, void*, void*);
 
-	typedef int(*GetDepotDecryptionKey_t)(void*, uint32_t, void*);
+	// 5-arg cdecl generic KV value reader (pObject, foo, KeyName, Key, KeySize),
+	// returns bytes written. Steam's depot-key loader; the one OST hooks.
+	typedef int(*LoadDepotDecryptionKey_t)(void*, uint32_t, char*, char*, uint32_t);
 
 	// 8-arg cdecl. arg4 (pDepotInfo) is a CUtlVector<DepotEntry>*; typed as void*
 	// here so the header stays decoupled from the sdk layout, the hook casts it.
@@ -111,7 +113,7 @@ namespace Hooks
 
 	extern DetourHook<TraceIPC_t> TraceIPC;
 
-	extern DetourHook<GetDepotDecryptionKey_t> GetDepotDecryptionKey;
+	extern DetourHook<LoadDepotDecryptionKey_t> LoadDepotDecryptionKey;
 	extern DetourHook<BuildDepotDependency_t> BuildDepotDependency;
 
 	extern DetourHook<CAPIJob_GetPlayerStats_t> CAPIJob_GetPlayerStats;

@@ -11,28 +11,28 @@
 // writes exactly this many bytes into the output buffer.
 static constexpr size_t kDepotKeySize = 32;
 
-bool DepotKey::provideKey(uint32_t depotId, void* outBuf)
+int DepotKey::provideKey(uint32_t depotId, void* outBuf, uint32_t outSize)
 {
 	const std::vector<uint8_t>* key = LuaLoader::getKey(depotId);
 	if (!key)
 	{
-		return false;
+		return 0;
 	}
 
-	// Defensive: only inject a correctly-sized key. parseHex64 already enforces
-	// exactly 32 bytes, but guard here so this memory-writing path does not rely
-	// on an invariant enforced in another layer; fall through to the original
-	// loader on any mismatch.
-	if (key->size() != kDepotKeySize)
+	// Defensive: only inject a correctly-sized key into a big-enough buffer.
+	// parseHex64 already enforces exactly 32 bytes, but guard here so this
+	// memory-writing path does not rely on an invariant enforced in another
+	// layer; fall through to the original loader on any mismatch.
+	if (key->size() != kDepotKeySize || !outBuf || outSize < kDepotKeySize)
 	{
-		return false;
+		return 0;
 	}
 
-	// arg3 is a pointer-to-pointer: dereference once to reach the buffer the
-	// loader expects the key to land in, then write the key at offset 0.
-	void* dst = *reinterpret_cast<void**>(outBuf);
-	memcpy(dst, key->data(), kDepotKeySize);
+	// Key is a direct output buffer (no pointer-to-pointer indirection): write
+	// the 32-byte key straight in and report how many bytes we wrote, matching
+	// the original loader's contract.
+	memcpy(outBuf, key->data(), kDepotKeySize);
 
 	g_pLog->once("Provided depot decryption key for %u\n", depotId);
-	return true;
+	return static_cast<int>(kDepotKeySize);
 }

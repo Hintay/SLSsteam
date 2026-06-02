@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -17,7 +18,10 @@ public:
 		std::string ticket;
 	};
 
-	extern uint32_t oneTimeSteamIdSpoof;
+	// Atomic: written by getTicketOwnershipExtendedData (one hook thread) and
+	// read-and-cleared by hkClientUser_GetSteamId (another) — exchange() keeps
+	// the one-time semantics without a torn/lost-update data race.
+	extern std::atomic<uint32_t> oneTimeSteamIdSpoof;
 	extern std::map<uint32_t, SavedTicket> ticketMap;
 	extern std::map<uint32_t, SavedTicket> encryptedTicketMap;
 

@@ -14,8 +14,10 @@ extern "C" {
 #include <lualib.h>
 }
 
+#include <atomic>
 #include <cctype>
 #include <cerrno>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -523,34 +525,31 @@ namespace LuaLoader {
     //
     // depotKeys and manifestOverrides are lua-only (no yaml counterpart).
     //
-    // THREADING NOTE: this function does read-modify-write on MTVariable fields
-    // (get → mutate → set) which is only safe because init() runs single-threaded
-    // at startup before Steam worker threads touch config; do NOT call from a hot path.
+    // THREADING NOTE: this runs at init() (single-threaded startup) AND on yaml
+    // hot-reload from the FileWatcher thread while Steam worker threads read these
+    // maps. Each merge therefore uses MTVariable::update() so the read-modify-write
+    // happens atomically under the writer lock instead of a racy get()+set().
     void mergeIntoConfig() {
         // Merge ownedAppIds (plain union — add every lua-registered id).
-        {
-            auto existing = g_config.addedAppIds.get();
+        g_config.addedAppIds.update([](std::unordered_set<uint32_t>& existing) {
             for (uint32_t id : ownedAppIds) {
                 existing.insert(id);
             }
-            g_config.addedAppIds.set(existing);
-            g_pLog->info("LuaLoader: merged %zu ownedAppIds into g_config.addedAppIds\n",
-                         ownedAppIds.size());
-        }
+        });
+        g_pLog->info("LuaLoader: merged %zu ownedAppIds into g_config.addedAppIds\n",
+                     ownedAppIds.size());
 
         // Merge appTokens: yaml wins on conflict, lua fills gaps.
-        {
-            auto existing = g_config.appTokens.get();
-            size_t added = 0;
+        size_t added = 0;
+        g_config.appTokens.update([&added](std::unordered_map<uint32_t, uint64_t>& existing) {
             for (const auto& [appId, token] : appTokens) {
                 if (existing.find(appId) == existing.end()) {
                     existing[appId] = token;
                     ++added;
                 }
             }
-            g_config.appTokens.set(existing);
-            g_pLog->info("LuaLoader: merged %zu new appTokens into g_config.appTokens\n", added);
-        }
+        });
+        g_pLog->info("LuaLoader: merged %zu new appTokens into g_config.appTokens\n", added);
     }
 
     // ── Derive the Steam root directory ───────────────────────────────────
@@ -615,6 +614,13 @@ namespace LuaLoader {
     }
 
     // ── Public entry point ────────────────────────────────────────────────
+    // Set true at the very end of init(); gates the FileWatcher hot-reload path
+    // (config.cpp) so it never merges while init() is still building the tables
+    // on the load thread.
+    std::atomic<bool> g_initDone{false};
+
+    bool initDone() { return g_initDone.load(); }
+
     void init() {
         if (g_lua) return; // Already initialised.
 
@@ -686,6 +692,10 @@ namespace LuaLoader {
         // ── Union lua tables into g_config ────────────────────────────────
         mergeIntoConfig();
 
+        // Publish readiness last: the source tables (ownedAppIds/appTokens/…) are
+        // now fully built and will only be read from here on, so a concurrent
+        // hot-reload merge is safe.
+        g_initDone = true;
         g_pLog->info("LuaLoader: init complete\n");
     }
 
@@ -737,15 +747,19 @@ namespace LuaLoader {
 
         if (lua_isinteger(L, -1)) {
             lua_Integer v = lua_tointeger(L, -1);
-            uint64_t uv = static_cast<uint64_t>(v);
-            if (uv == 0) return false;
-            out = uv;
+            // Reject <= 0: a negative error sentinel (e.g. -1) would otherwise
+            // cast to a huge bogus uint64 and be reported as a valid code,
+            // suppressing the fallback to the next provider.
+            if (v <= 0) return false;
+            out = static_cast<uint64_t>(v);
             return true;
         }
         if (lua_isnumber(L, -1)) {
             // Lua numbers may lose precision for large u64, but tolerate the path.
             double d = lua_tonumber(L, -1);
-            if (d <= 0) return false;
+            // Reject non-finite or out-of-range values: casting inf/NaN or a value
+            // >= 2^64 to uint64_t is undefined behaviour.
+            if (!std::isfinite(d) || d <= 0.0 || d >= 18446744073709551616.0) return false;
             out = static_cast<uint64_t>(d);
             return (out != 0);
         }

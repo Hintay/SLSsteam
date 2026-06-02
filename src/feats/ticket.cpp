@@ -16,14 +16,21 @@
 #include "yaml-cpp/emitter.h"
 #include "yaml-cpp/emittermanip.h"
 
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <ios>
+#include <mutex>
 #include <sstream>
 
-uint32_t Ticket::oneTimeSteamIdSpoof = 0;
+std::atomic<uint32_t> Ticket::oneTimeSteamIdSpoof{0};
 std::map<uint32_t, Ticket::SavedTicket> Ticket::ticketMap = std::map<uint32_t, SavedTicket>();
 std::map<uint32_t, Ticket::SavedTicket> Ticket::encryptedTicketMap = std::map<uint32_t, SavedTicket>();
+
+// Guards ticketMap / encryptedTicketMap. getCached*/save* run on both the
+// network-recv hook thread and the IPC/launch hook thread, and std::map is not
+// safe for concurrent insert+read (red-black tree rebalance corrupts a reader).
+static std::mutex ticketMapMutex;
 
 std::string Ticket::getTicketDir()
 {
@@ -63,9 +70,13 @@ Ticket::SavedTicket Ticket::getCachedTicket(uint32_t appId)
 		return ticket;
 	}
 
-	if (ticketMap.contains(appId))
 	{
-		return ticketMap[appId];
+		std::lock_guard<std::mutex> lock(ticketMapMutex);
+		const auto it = ticketMap.find(appId);
+		if (it != ticketMap.end())
+		{
+			return it->second;
+		}
 	}
 
 	SavedTicket ticket {};
@@ -80,15 +91,27 @@ Ticket::SavedTicket Ticket::getCachedTicket(uint32_t appId)
 
 	g_pLog->debug("Reading ticket for %u\n", appId);
 
-	auto node = YAML::LoadFile(path);
-	ticket.steamId = node["steamId"].as<uint32_t>();
-	ticket.ticket = std::string
-	(
-		base64::from_base64(node["ticket"].as<std::string>())
-	);
-	//g_pLog->debug("Ticket: %u, %s\n", ticket.steamId, ticket.ticket.c_str());
+	try
+	{
+		auto node = YAML::LoadFile(path);
+		ticket.steamId = node["steamId"].as<uint32_t>();
+		ticket.ticket = std::string
+		(
+			base64::from_base64(node["ticket"].as<std::string>())
+		);
+	}
+	catch (const std::exception& e)
+	{
+		// Corrupt/hand-edited cache file: don't let a YAML/base64 exception unwind
+		// through the Steam hook thread (→ std::terminate). Treat it as a miss.
+		g_pLog->warn("Ticket: failed to parse cached ticket for %u: %s\n", appId, e.what());
+		return SavedTicket {};
+	}
 
-	ticketMap[appId] = ticket;
+	{
+		std::lock_guard<std::mutex> lock(ticketMapMutex);
+		ticketMap[appId] = ticket;
+	}
 
 	return ticket;
 }
@@ -128,7 +151,10 @@ bool Ticket::saveTicketToCache(CMsgClientGetAppOwnershipTicketResponse* resp)
 	//TODO: Skip copy
 	SavedTicket ticket {};
 	ticket.ticket = bytes;
-	ticketMap[appId] = ticket;
+	{
+		std::lock_guard<std::mutex> lock(ticketMapMutex);
+		ticketMap[appId] = ticket;
+	}
 
 	return true;
 }
@@ -172,16 +198,13 @@ Ticket::SavedTicket Ticket::getCachedEncryptedTicket(uint32_t appId)
 
 	SavedTicket ticket {};
 
-	if (realAppId && fakeAppId && appId != realAppId)
-	{
-		g_pLog->once("Returning empty cached encrypted ticket for %u because it's set to %u\n", realAppId, fakeAppId);
-		return ticket;
-	}
-
-	// Lua-provided encrypted tickets take priority over the runtime cache and disk.
-	// steamId is 0 for encrypted tickets (no plaintext SteamID available), so the
-	// GetSteamId hook falls back to oneTimeSteamIdSpoof from the app ticket path.
-	// The protobuf replay path in recvEncryptedAppTicket also skips if steamId==0.
+	// Lua-provided encrypted tickets take priority over the runtime cache, disk,
+	// and fake-app-id remapping — same ordering as getCachedTicket so a script
+	// that registered a ticket via seteticket is honoured even when the app is
+	// subject to fake-app-id remapping. steamId is 0 for encrypted tickets (no
+	// plaintext SteamID available), so the GetSteamId hook falls back to
+	// oneTimeSteamIdSpoof from the app ticket path; the protobuf replay path in
+	// recvEncryptedAppTicket also skips if steamId==0.
 	const LuaLoader::LuaTicket* luaTkt = LuaLoader::getEncTicket(appId);
 	if (luaTkt)
 	{
@@ -192,9 +215,19 @@ Ticket::SavedTicket Ticket::getCachedEncryptedTicket(uint32_t appId)
 		return ticket;
 	}
 
-	if (encryptedTicketMap.contains(appId))
+	if (realAppId && fakeAppId && appId != realAppId)
 	{
-		return encryptedTicketMap[appId];
+		g_pLog->once("Returning empty cached encrypted ticket for %u because it's set to %u\n", realAppId, fakeAppId);
+		return ticket;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(ticketMapMutex);
+		const auto it = encryptedTicketMap.find(appId);
+		if (it != encryptedTicketMap.end())
+		{
+			return it->second;
+		}
 	}
 
 	const auto path = getEncryptedTicketPath(appId);
@@ -207,21 +240,25 @@ Ticket::SavedTicket Ticket::getCachedEncryptedTicket(uint32_t appId)
 
 	g_pLog->debug("Reading encrypted ticket for %u\n", appId);
 
-	auto node = YAML::LoadFile(path);
-	ticket.steamId = node["steamId"].as<uint32_t>();
-	ticket.ticket = std::string
-	(
-		//Can not get yaml-cpp to properly decode
-		//TODO: Investigate
-		//reinterpret_cast<const char*>
-		//(
-		//	&YAML::DecodeBase64(node["encryptedTicket"].as<std::string>()).at(0)
-		//)
-		base64::from_base64(node["encryptedTicket"].as<std::string>())
-	);
-	//g_pLog->debug("Ticket: %u, %s\n", ticket.steamId, ticket.ticket.c_str());
+	try
+	{
+		auto node = YAML::LoadFile(path);
+		ticket.steamId = node["steamId"].as<uint32_t>();
+		ticket.ticket = std::string
+		(
+			base64::from_base64(node["encryptedTicket"].as<std::string>())
+		);
+	}
+	catch (const std::exception& e)
+	{
+		g_pLog->warn("Ticket: failed to parse cached encrypted ticket for %u: %s\n", appId, e.what());
+		return SavedTicket {};
+	}
 
-	encryptedTicketMap[appId] = ticket;
+	{
+		std::lock_guard<std::mutex> lock(ticketMapMutex);
+		encryptedTicketMap[appId] = ticket;
+	}
 
 	return ticket;
 }
@@ -262,7 +299,10 @@ bool Ticket::saveEncryptedTicketToCache(CMsgClientRequestEncryptedAppTicketRespo
 	SavedTicket ticket {};
 	ticket.steamId = g_currentSteamId;
 	ticket.ticket = bytes;
-	encryptedTicketMap[appId] = ticket;
+	{
+		std::lock_guard<std::mutex> lock(ticketMapMutex);
+		encryptedTicketMap[appId] = ticket;
+	}
 	
 	return true;
 }

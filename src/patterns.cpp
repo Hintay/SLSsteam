@@ -65,15 +65,18 @@ namespace Patterns
 		std::vector<uint8_t> { 0x56, 0x57, 0xe5, 0x89, 0x55 }
 	};
 
-	Pattern_t GetDepotDecryptionKey
+	Pattern_t LoadDepotDecryptionKey
 	{
-		"GetDepotDecryptionKey",
-		// Entry of the depot-key local loader (3-arg, ESP-relative, no EBP frame).
-		// The bare prologue is shared by ~4 sites, so the signature is extended with
-		// function-specific body bytes (stack canary store, arg3 load into ESI,
-		// PUSH 0x80 / PUSH ESI) to resolve to a single location. The PIC thunk call
-		// and the ADD EBX,GOT displacement are wildcarded (build-relative).
-		"57 56 53 E8 ? ? ? ? 81 C3 ? ? ? ? 81 EC 18 01 00 00 65 A1 14 00 00 00 89 84 24 14 01 00 00 31 C0 8B B4 24 30 01 00 00 68 80 00 00 00 56",
+		"LoadDepotDecryptionKey",
+		// Entry of the generic KV value reader Steam uses to load a depot
+		// decryption key (5-arg cdecl: pObject, foo, KeyName, Key, KeySize;
+		// reached via a vtable+0x18 virtual call). This is the function OST hooks
+		// (Hooks_Decryption). The bare prologue (push ebp/edi/esi/ebx) is shared,
+		// so the signature is extended with the distinctive argument-spill
+		// sequence (sub esp,0x24; mov eax,[esp+0x44]; mov ebp,[esp+0x38]; ...)
+		// that resolves to a single location. The PIC thunk call and the
+		// ADD EBX,GOT displacement are wildcarded (build-relative).
+		"55 57 56 53 E8 ? ? ? ? 81 C3 ? ? ? ? 83 EC 24 8B 44 24 44 8B 6C 24 38 8B 7C 24 3C 8B 74 24 40 89 44 24 10 8B 44 24 48 89 44 24 14",
 		SigFollowMode::None
 	};
 

@@ -31,6 +31,16 @@ public:
 		instance = value;
 	}
 
+	//Atomic read-modify-write: the mutator runs under the writer lock with a
+	//reference to the live instance. Use this instead of get()+set() whenever
+	//the new value depends on the old one and another thread may race (e.g.
+	//config hot-reload merging into a map that Steam worker threads read).
+	template<typename F> void update(F&& fn)
+	{
+		const auto lock = std::unique_lock(mutex);
+		fn(instance);
+	}
+
 	void operator=(MTVariable<T> other)
 	{
 		set(other.instance);

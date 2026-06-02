@@ -12,7 +12,18 @@ void Manifest::patchDepotInfo(CUtlVector<DepotEntry>* pDepotInfo)
 		return;
 	}
 
-	for (int32_t i = 0; i < pDepotInfo->m_Size; ++i)
+	// Trust neither m_Size nor m_pMemory blindly: BuildDepotDependency can return
+	// on the browse/verify path with the vector half-populated. m_Size is signed
+	// (a negative sentinel already yields zero iterations), but guard the upper
+	// bound against a stale positive count so we never walk past the real
+	// allocation and read/write Steam-owned memory.
+	const int32_t size = pDepotInfo->m_Size;
+	if (size <= 0 || static_cast<uint32_t>(size) > pDepotInfo->m_Memory.m_nAllocationCount)
+	{
+		return;
+	}
+
+	for (int32_t i = 0; i < size; ++i)
 	{
 		DepotEntry& entry = entries[i];
 

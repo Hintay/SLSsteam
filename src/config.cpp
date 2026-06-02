@@ -338,9 +338,16 @@ bool CConfig::loadSettings()
 	// Re-apply the lua union after the yaml fields (addedAppIds/appTokens) were
 	// overwritten wholesale above. This matters on FileWatcher hot-reload, where
 	// loadSettings() re-runs but LuaLoader::init() does NOT — without this, lua-only
-	// appIds would vanish from g_config until a restart. No-op before LuaLoader::init()
-	// (its tables are empty), so the startup ordering (loadSettings → init) is unaffected.
-	LuaLoader::mergeIntoConfig();
+	// appIds would vanish from g_config until a restart.
+	//
+	// Gate on initDone(): before init() finishes its tables are empty (so this was
+	// a no-op anyway) AND being written on the load thread, so a FileWatcher
+	// hot-reload merging here would race that construction. After init() it is safe
+	// (the tables are frozen, read-only).
+	if (LuaLoader::initDone())
+	{
+		LuaLoader::mergeIntoConfig();
+	}
 
 	return true;
 }

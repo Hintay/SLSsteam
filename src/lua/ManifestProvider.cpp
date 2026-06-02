@@ -3,10 +3,12 @@
 #include "../curl.hpp"
 #include "../log.hpp"
 
+#include <charconv>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <system_error>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,11 +32,13 @@ static bool parsePlainUint(std::string_view body, uint64_t& out)
         --last;
     if (first == last) return false;
 
-    errno = 0;
-    char* end = nullptr;
-    unsigned long long v = strtoull(first, &end, 10);
-    if (errno != 0 || end != last) return false;
-    out = static_cast<uint64_t>(v);
+    // from_chars is bounded by [first, last): unlike strtoull it never scans past
+    // the view, so it is safe on the non-null-terminated substring that
+    // parseSteamRunJson hands in. Require the whole trimmed view to be consumed.
+    uint64_t v = 0;
+    const auto [end, ec] = std::from_chars(first, last, v, 10);
+    if (ec != std::errc{} || end != last) return false;
+    out = v;
     return true;
 }
 

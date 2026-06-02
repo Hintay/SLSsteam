@@ -4,6 +4,7 @@
 
 #include <curl/curl.h>
 #include <curl/easy.h>
+#include <mutex>
 #include <strings.h>  // strcasecmp (POSIX)
 
 // Accumulate response bytes into a std::string.
@@ -21,6 +22,12 @@ int Curl::request(const char* method,
                   long& statusOut)
 {
 	statusOut = 0;
+
+	// curl_easy_init lazily runs the non-thread-safe curl_global_init on first
+	// use; force it once up-front so concurrent RequestCode fetch threads cannot
+	// race that global initialisation.
+	static std::once_flag s_curlInitOnce;
+	std::call_once(s_curlInitOnce, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
 
 	CURL* handle = curl_easy_init();
 	if (!handle)
@@ -53,8 +60,8 @@ int Curl::request(const char* method,
 	if (slist)
 		curl_easy_setopt(handle, CURLOPT_HTTPHEADER, slist);
 
-	curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 10L); // connect timeout (s)
-	curl_easy_setopt(handle, CURLOPT_TIMEOUT, 30L);        // total transfer timeout (s)
+	curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 5L);  // connect timeout (s)
+	curl_easy_setopt(handle, CURLOPT_TIMEOUT, 10L);        // total transfer timeout (s); kept under RequestCode MAX_WAIT (12s)
 
 	CURLcode res = curl_easy_perform(handle);
 

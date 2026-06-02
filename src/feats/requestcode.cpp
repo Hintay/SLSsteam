@@ -10,6 +10,7 @@
 #include "../log.hpp"
 
 #include <chrono>
+#include <exception>
 #include <future>
 #include <mutex>
 #include <unordered_map>
@@ -37,11 +38,12 @@ namespace RequestCode
 		// ServiceMethod target name we intercept.
 		constexpr char TARGET_JOB_NAME[] = "ContentServerDirectory.GetManifestRequestCode#1";
 
-		// Upper bound on how long the recv handler blocks waiting for the
-		// fetch. LuaLoader's built-in HTTP provider already uses a 30s curl
-		// timeout; keep a small margin over that so a slow-but-valid fetch
-		// still lands instead of being dropped.
-		constexpr auto MAX_WAIT = std::chrono::seconds(35);
+		// Upper bound on how long the recv handler blocks the incoming-message
+		// dispatch thread waiting for the fetch. Matches OST's 12s. The curl
+		// total timeout (10s) sits just under this so a slow-but-valid fetch
+		// still lands, while keeping the dispatch-thread stall short enough not
+		// to risk the CM heartbeat / connection (the old 35s could).
+		constexpr auto MAX_WAIT = std::chrono::seconds(12);
 
 		// jobid_source (from the outgoing call) -> pending fetch future.
 		// Touched from the send hook and the recv hook only (the async lambda
@@ -88,19 +90,45 @@ namespace RequestCode
 		);
 
 		// Launch the fetch off-thread so the original request is not blocked.
-		auto future = std::async
-		(
-			std::launch::async,
-			[appId, depotId, gid]() -> uint64_t
-			{
-				uint64_t code = 0;
-				if (LuaLoader::fetchManifestCode(appId, depotId, gid, code))
+		// The lambda swallows every exception (returning 0 on failure) so nothing
+		// can propagate out of future.get() into the Steam message hook, and the
+		// std::async call itself is guarded against thread-creation failure — an
+		// exception escaping either site would unwind through a C trampoline and
+		// std::terminate the client.
+		std::shared_future<uint64_t> future;
+		try
+		{
+			future = std::async
+			(
+				std::launch::async,
+				[appId, depotId, gid]() -> uint64_t
 				{
-					return code;
+					try
+					{
+						uint64_t code = 0;
+						if (LuaLoader::fetchManifestCode(appId, depotId, gid, code))
+						{
+							return code;
+						}
+					}
+					catch (const std::exception& e)
+					{
+						g_pLog->warn("RequestCode: fetch threw: %s\n", e.what());
+					}
+					catch (...)
+					{
+						g_pLog->warn("RequestCode: fetch threw an unknown exception\n");
+					}
+					return 0;
 				}
-				return 0;
-			}
-		).share();
+			).share();
+		}
+		catch (const std::exception& e)
+		{
+			g_pLog->warn("RequestCode: failed to launch fetch for jobid=%llu: %s\n",
+			             static_cast<unsigned long long>(jobId), e.what());
+			return;
+		}
 
 		std::lock_guard<std::mutex> lock(g_mutex);
 		g_pending[jobId] = std::move(future);
@@ -133,7 +161,17 @@ namespace RequestCode
 			return;
 		}
 
-		const uint64_t code = future.get();
+		uint64_t code = 0;
+		try
+		{
+			code = future.get();
+		}
+		catch (const std::exception& e)
+		{
+			g_pLog->warn("RequestCode: fetch exception for jobid=%llu: %s\n",
+			             static_cast<unsigned long long>(jobId), e.what());
+			return;
+		}
 		if (!code)
 		{
 			//Fetch failed: leave the response untouched so the install fails gracefully.
