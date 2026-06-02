@@ -40,6 +40,13 @@ namespace LuaLoader {
     // but fetchManifestCode runs the lua provider callbacks from std::async
     // workers (one per concurrent depot), so all g_lua access from there is
     // serialized under this mutex.
+    //
+    // Tradeoff (accepted): if a lua provider callback itself does HTTP (http_get/
+    // http_post), that I/O runs while the lock is held, serializing concurrent
+    // lua-provider fetches. This is inherent to a single-threaded VM — the lock
+    // cannot be released mid-pcall while the script is running. The built-in HTTP
+    // provider (no lua) is unaffected. Pathological many-depot + lua-HTTP installs
+    // may exceed the recv-side wait and fall back to a failed (retryable) install.
     static std::mutex g_luaMtx;
 
     // Case-insensitive function registry: lowercase name → C function.

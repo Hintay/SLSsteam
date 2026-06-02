@@ -44,8 +44,8 @@ namespace RequestCode
 		constexpr auto MAX_WAIT = std::chrono::seconds(35);
 
 		// jobid_source (from the outgoing call) -> pending fetch future.
-		// Touched from the send hook, the recv hook, and async completion;
-		// guard every access with g_mutex.
+		// Touched from the send hook and the recv hook only (the async lambda
+		// returns a value and never touches this map); guard every access with g_mutex.
 		std::unordered_map<uint64_t, std::shared_future<uint64_t>> g_pending;
 		std::mutex g_mutex;
 	}
@@ -64,6 +64,14 @@ namespace RequestCode
 
 		const auto body = msg->getBody<CContentServerDirectory_GetManifestRequestCode_Request>();
 		if (!body->has_app_id() || !body->has_depot_id() || !body->has_manifest_id())
+		{
+			return;
+		}
+
+		// jobid_source is always set on a real ServiceMethodCallFromClient, but
+		// guard against a malformed packet whose unset field would default to
+		// k_GIDNil and later spuriously match an unset jobid_target on recv.
+		if (!msg->header->has_jobid_source())
 		{
 			return;
 		}
