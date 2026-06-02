@@ -28,6 +28,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -535,6 +536,52 @@ static bool fetchManifestCode(uint32_t appId, uint32_t depotId,
 
 } // namespace SmokeLoader
 
+// ── Mirror of LuaLoader::parseLuaFile (incremental per-line parser) ──────────
+static int smoke_parseLuaString(lua_State* L, const std::string& src) {
+    int executed = 0;
+    std::string chunk, line;
+    std::istringstream in(src);
+    while (std::getline(in, line)) {
+        if (!chunk.empty()) chunk += '\n';
+        chunk += line;
+        lua_settop(L, 0);
+        int rc = luaL_loadstring(L, chunk.c_str());
+        if (rc == LUA_OK) {
+            if (lua_pcall(L, 0, 0, 0) == LUA_OK) ++executed;
+            chunk.clear();
+        } else if (rc == LUA_ERRSYNTAX) {
+            const char* err = lua_tostring(L, -1);
+            bool incomplete = err && std::string_view(err).find("<eof>") != std::string_view::npos;
+            lua_pop(L, 1);
+            if (!incomplete) chunk.clear();
+        } else {
+            lua_pop(L, 1);
+            chunk.clear();
+        }
+    }
+    return executed;
+}
+
+static void test_incremental_parser() {
+    lua_State* L = luaL_newstate(); luaL_openlibs(L);
+    luaL_dostring(L, "n = 0");
+    int ok = smoke_parseLuaString(L,
+        "n = n + 1\n"
+        "n = @\n"
+        "n = n + 1\n"
+        "n = n + 1\n");
+    lua_getglobal(L, "n");
+    int n = (int)lua_tointeger(L, -1);
+    assert(ok == 3 && "3 good statements should execute");
+    assert(n == 3 && "bad line must not swallow following lines");
+    luaL_dostring(L, "m = 0");
+    int ok2 = smoke_parseLuaString(L, "if true\nthen\n  m = 5\nend\n");
+    lua_getglobal(L, "m"); int m = (int)lua_tointeger(L, -1);
+    assert(ok2 == 1 && m == 5 && "multi-line statement accumulates");
+    lua_close(L);
+    std::printf("test_incremental_parser OK\n");
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────
 
 int main() {
@@ -950,6 +997,9 @@ int main() {
             SmokeLoader::g_fetchCodeRef   = savedRef;
         }
     }
+
+    // ── Task 1: incremental per-line parser ──────────────────────────────
+    test_incremental_parser();
 
     // Cleanup temp files.
     std::error_code ec;

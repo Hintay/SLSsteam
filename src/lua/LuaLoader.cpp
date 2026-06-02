@@ -21,8 +21,11 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace LuaLoader {
@@ -562,6 +565,58 @@ namespace LuaLoader {
         return "";
     }
 
+    // Parse one .lua file line-by-line, accumulating into a chunk until it
+    // compiles, then executing it. A genuine syntax error logs + skips that
+    // statement (does NOT discard the rest of the file); a multi-line statement
+    // (luaL_loadstring reports "<eof>") keeps accumulating. Mirrors OST ParseFile.
+    static void parseLuaFile(const std::string& filePath) {
+        if (!g_lua) {
+            g_pLog->warn("LuaLoader: parseLuaFile called before init()\n");
+            return;
+        }
+        std::ifstream file(filePath);
+        if (!file) {
+            g_pLog->warn("LuaLoader: failed to open %s\n", filePath.c_str());
+            return;
+        }
+        std::string chunk, line;
+        int lineNo = 0;
+        while (std::getline(file, line)) {
+            ++lineNo;
+            if (!chunk.empty()) chunk += '\n';
+            chunk += line;
+            lua_settop(g_lua, 0);
+            int rc = luaL_loadstring(g_lua, chunk.c_str());
+            if (rc == LUA_OK) {
+                if (lua_pcall(g_lua, 0, 0, 0) != LUA_OK) {
+                    const char* err = lua_tostring(g_lua, -1);
+                    g_pLog->warn("LuaLoader: %s:%d: %s\n", filePath.c_str(), lineNo,
+                                 err ? err : "unknown error");
+                    lua_pop(g_lua, 1);
+                }
+                chunk.clear();
+            } else if (rc == LUA_ERRSYNTAX) {
+                const char* err = lua_tostring(g_lua, -1);
+                bool incomplete = err && std::string_view(err).find("<eof>") != std::string_view::npos;
+                if (!incomplete) {
+                    g_pLog->warn("LuaLoader: %s:%d: %s\n", filePath.c_str(), lineNo,
+                                 err ? err : "syntax error");
+                }
+                lua_pop(g_lua, 1);
+                if (!incomplete) chunk.clear();
+            } else {
+                const char* err = lua_tostring(g_lua, -1);
+                g_pLog->warn("LuaLoader: %s:%d: %s\n", filePath.c_str(), lineNo,
+                             err ? err : "load error");
+                lua_pop(g_lua, 1);
+                chunk.clear();
+            }
+        }
+        if (!chunk.empty()) {
+            g_pLog->warn("LuaLoader: %s: incomplete statement at end of file\n", filePath.c_str());
+        }
+    }
+
     // ── Directory scanner ─────────────────────────────────────────────────
     // Runs every .lua file in dir through the Lua VM.
     // Silently skips missing directories (they may not exist yet).
@@ -581,20 +636,7 @@ namespace LuaLoader {
 
             const std::string filePath = entry.path().string();
             g_pLog->info("LuaLoader: loading %s\n", filePath.c_str());
-
-            lua_settop(g_lua, 0);
-            int rc = luaL_loadfile(g_lua, filePath.c_str());
-            if (rc != LUA_OK) {
-                g_pLog->warn("LuaLoader: compile error in %s: %s\n",
-                             filePath.c_str(), lua_tostring(g_lua, -1));
-                lua_pop(g_lua, 1);
-                continue;
-            }
-            if (lua_pcall(g_lua, 0, 0, 0) != LUA_OK) {
-                g_pLog->warn("LuaLoader: runtime error in %s: %s\n",
-                             filePath.c_str(), lua_tostring(g_lua, -1));
-                lua_pop(g_lua, 1);
-            }
+            parseLuaFile(filePath);
         }
     }
 
