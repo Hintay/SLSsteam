@@ -186,7 +186,7 @@ namespace LuaLoader {
                 g_pendingAdditions.push_back(id);
             }
             auto mt = g_fileMtime.find(g_currentFile);
-            if (mt != g_fileMtime.end()) {
+            if (mt != g_fileMtime.end() && mt->second != 0) {
                 uint32_t& slot = g_purchaseTime[id];
                 if (mt->second > slot) slot = mt->second;
             }
@@ -568,6 +568,47 @@ namespace LuaLoader {
             }
         });
         g_pLog->info("LuaLoader: merged %zu new appTokens into g_config.appTokens\n", added);
+    }
+
+    // Remove every contribution of `path`. refcount→0 ids are erased from ALL
+    // lua maps (more thorough than OST, which leaks manifest/token/ticket/stat)
+    // and queued for removal. Caller holds g_fileMtx.
+    void unloadFile(const std::string& path) {
+        auto it = g_fileIds.find(path);
+        if (it == g_fileIds.end()) return;
+        for (uint32_t id : it->second) {
+            if (--g_idRefCount[id] == 0) {
+                g_idRefCount.erase(id);
+                g_purchaseTime.erase(id);
+                g_pendingRemovals.push_back(id);
+                ownedAppIds.erase(id);
+                depotKeys.erase(id);
+                manifestOverrides.erase(id);
+                appTokens.erase(id);
+                statSteamIds.erase(id);
+                appTickets.erase(id);
+                encTickets.erase(id);
+            }
+        }
+        g_fileIds.erase(it);
+        g_fileMtime.erase(path);
+    }
+
+    std::vector<uint32_t> getAllDepotIds() {
+        std::lock_guard<std::mutex> lock(g_fileMtx);
+        std::vector<uint32_t> out;
+        out.reserve(ownedAppIds.size());
+        for (uint32_t id : ownedAppIds) out.push_back(id);
+        return out;
+    }
+
+    std::vector<uint32_t> takePendingAdditions() {
+        std::lock_guard<std::mutex> lock(g_fileMtx);
+        std::vector<uint32_t> out; out.swap(g_pendingAdditions); return out;
+    }
+    std::vector<uint32_t> takePendingRemovals() {
+        std::lock_guard<std::mutex> lock(g_fileMtx);
+        std::vector<uint32_t> out; out.swap(g_pendingRemovals); return out;
     }
 
     // ── Derive the Steam root directory ───────────────────────────────────

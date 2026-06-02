@@ -51,6 +51,11 @@ namespace LuaLoader {
     // call before init() — operates on the (then empty) tables.
     void mergeIntoConfig();
 
+    void unloadFile(const std::string& path);
+    std::vector<uint32_t> getAllDepotIds();
+    std::vector<uint32_t> takePendingAdditions();
+    std::vector<uint32_t> takePendingRemovals();
+
     // ── Query APIs (T2) ───────────────────────────────────────────────────────
 
     // Returns a pointer to the 32-byte depot decryption key for depotId,

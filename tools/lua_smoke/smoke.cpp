@@ -557,6 +557,9 @@ static void test_refcount() {
     SmokeFileTrack t;
     t.addId("a.lua", 100); t.addId("b.lua", 100); t.addId("a.lua", 200);
     assert(t.refCount[100] == 2 && t.refCount[200] == 1);
+    assert(t.pendingAdd.size() == 2);            // 100 and 200 each fired once on 0→1
+    t.addId("a.lua", 100);                        // duplicate within same file — no-op
+    assert(t.refCount[100] == 2 && t.pendingAdd.size() == 2);
     t.unload("a.lua");
     assert(t.refCount[100] == 1);
     assert(t.refCount.find(200) == t.refCount.end());
@@ -564,6 +567,17 @@ static void test_refcount() {
     t.unload("b.lua");
     assert(t.refCount.find(100) == t.refCount.end());
     std::printf("test_refcount OK\n");
+}
+
+// ── Task 3: unloadFile removes a file's ids from ALL maps ────────────────────
+static void test_unload_full_removal() {
+    std::unordered_set<uint32_t> owned{100, 200};
+    std::unordered_map<uint32_t, int> keys{{100,1},{200,1}}, tokens{{200,7}};
+    uint32_t id = 200;
+    owned.erase(id); keys.erase(id); tokens.erase(id);
+    assert(owned.count(200) == 0 && keys.count(200) == 0 && tokens.count(200) == 0);
+    assert(owned.count(100) == 1 && keys.count(100) == 1);
+    std::printf("test_unload_full_removal OK\n");
 }
 
 // ── Mirror of LuaLoader::parseLuaFile (incremental per-line parser) ──────────
@@ -1033,6 +1047,9 @@ int main() {
 
     // ── Task 2: per-file refcount bookkeeping ────────────────────────────
     test_refcount();
+
+    // ── Task 3: unloadFile full removal ──────────────────────────────────
+    test_unload_full_removal();
 
     // Cleanup temp files.
     std::error_code ec;
