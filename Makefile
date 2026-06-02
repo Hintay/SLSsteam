@@ -10,10 +10,12 @@ objs := $(srcs:src/%.cpp=obj/%.o)
 deps := $(objs:%.o=%.d)
 
 CXXFLAGS := -O3 -flto=auto -fPIC -m32 -std=c++20 -Wall -Wextra -Wpedantic -Wno-error=format-security -D_GLIBCXX_USE_CXX11_ABI=0
+CXXFLAGS += $(shell pkg-config --cflags "lua5.4")
 
 LDFLAGS := -shared -Wl,--no-undefined
 LDFLAGS += $(shell pkg-config --libs "openssl")
 LDFLAGS += $(shell pkg-config --libs "libcurl")
+LDFLAGS += $(shell pkg-config --libs "lua5.4")
 
 #DATE := $(shell date "+%Y%m%d%H%M%S")
 DATE := $(shell cat res/version.txt)
@@ -29,6 +31,19 @@ endif
 ifeq ($(shell type mold &> /dev/null && echo "found"),found)
 	LDFLAGS += -fuse-ld=mold
 endif
+
+# Smoke-test binary: validates Lua VM init + case-insensitive binding lookup.
+# Self-contained: does not link SLSsteam internals (no libmem, no yaml-cpp, etc.).
+# Run on the Deck: make lua_smoke && ./bin/lua_smoke
+SMOKE_CXXFLAGS := -m32 -std=c++20 -O0 -g \
+                  $(shell pkg-config --cflags "lua5.4")
+SMOKE_LDFLAGS := $(shell pkg-config --libs "lua5.4")
+
+bin/lua_smoke: tools/lua_smoke/smoke.cpp
+	@mkdir -p bin
+	$(CXX) $(SMOKE_CXXFLAGS) $< -o $@ $(SMOKE_LDFLAGS)
+
+lua_smoke: bin/lua_smoke
 
 audit-libs: bin/SLSsteam.so bin/library-inject.so tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber
 
