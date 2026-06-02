@@ -12,6 +12,8 @@
 
 enum EMsgType : uint16_t
 {
+	EMSG_SERVICE_METHOD_RESPONSE = 147,            //k_EMsgServiceMethodResponse (incoming ServiceMethod reply)
+	EMSG_SERVICE_METHOD_CALL_FROM_CLIENT = 151,    //k_EMsgServiceMethodCallFromClient (outgoing ServiceMethod call)
 	EMSG_GAMESPLAYED_NO_DATABLOB = 715,
 	EMSG_GAMESPLAYED = 742,
 	EMSG_REQUEST_USERSTATS_RESPONSE = 819,
