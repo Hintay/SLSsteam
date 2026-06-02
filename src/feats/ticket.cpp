@@ -58,7 +58,7 @@ Ticket::SavedTicket Ticket::getCachedTicket(uint32_t appId)
 {
 	// Lua-provided tickets take priority over the runtime cache and disk.
 	// They live only in memory — no disk read/write; see LuaLoader T7.
-	const LuaLoader::LuaTicket* luaTkt = LuaLoader::getAppTicket(appId);
+	const auto luaTkt = LuaLoader::getAppTicket(appId);
 	if (luaTkt)
 	{
 		g_pLog->debug("Using lua app ticket for %u (steamId=0x%08x)\n", appId, luaTkt->steamId);
@@ -205,7 +205,7 @@ Ticket::SavedTicket Ticket::getCachedEncryptedTicket(uint32_t appId)
 	// plaintext SteamID available), so the GetSteamId hook falls back to
 	// oneTimeSteamIdSpoof from the app ticket path; the protobuf replay path in
 	// recvEncryptedAppTicket also skips if steamId==0.
-	const LuaLoader::LuaTicket* luaTkt = LuaLoader::getEncTicket(appId);
+	const auto luaTkt = LuaLoader::getEncTicket(appId);
 	if (luaTkt)
 	{
 		g_pLog->debug("Using lua encrypted ticket for %u\n", appId);

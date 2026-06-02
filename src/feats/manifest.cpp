@@ -27,7 +27,7 @@ void Manifest::patchDepotInfo(CUtlVector<DepotEntry>* pDepotInfo)
 	{
 		DepotEntry& entry = entries[i];
 
-		const LuaLoader::ManifestOverride* ov = LuaLoader::getManifest(entry.DepotId);
+		const auto ov = LuaLoader::getManifest(entry.DepotId);
 		if (!ov)
 		{
 			continue;

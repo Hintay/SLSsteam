@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -51,6 +52,9 @@ namespace LuaLoader {
     // call before init() — operates on the (then empty) tables.
     void reconcileIntoConfig();
 
+    void onDepotsChanged();
+    void setOnDepotsChanged(void (*fn)());
+
     void unloadFile(const std::string& path);
     std::vector<uint32_t> getAllDepotIds();
     std::vector<uint32_t> takePendingAdditions();
@@ -60,11 +64,11 @@ namespace LuaLoader {
 
     // Returns a pointer to the 32-byte depot decryption key for depotId,
     // or nullptr if no key was registered via addappid(..., "hexkey").
-    const std::vector<uint8_t>* getKey(uint32_t depotId);
+    std::vector<uint8_t> getKey(uint32_t depotId);
 
     // Returns a pointer to the manifest GID+size override for depotId,
     // or nullptr if setmanifestid was not called for that depot.
-    const ManifestOverride* getManifest(uint32_t depotId);
+    std::optional<ManifestOverride> getManifest(uint32_t depotId);
 
     // Returns the Steam ID associated with appId via setstat (T8).
     // Falls back to 76561198028121353 when not set.
@@ -72,11 +76,11 @@ namespace LuaLoader {
 
     // Returns a pointer to the in-memory app ownership ticket for appId
     // registered via setappticket(), or nullptr if not present.
-    const LuaTicket* getAppTicket(uint32_t appId);
+    std::optional<LuaTicket> getAppTicket(uint32_t appId);
 
     // Returns a pointer to the in-memory encrypted ticket for appId
     // registered via seteticket(), or nullptr if not present.
-    const LuaTicket* getEncTicket(uint32_t appId);
+    std::optional<LuaTicket> getEncTicket(uint32_t appId);
 
     // Fetch the manifest request code for (appId, depotId, gid).
     // Selection order (mirrors OST FetchManifestRequestCode):

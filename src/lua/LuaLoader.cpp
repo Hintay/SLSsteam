@@ -5,6 +5,7 @@
 #include "../globals.hpp"
 #include "../log.hpp"
 #include "ManifestProvider.hpp"
+#include "../filewatcher.hpp"
 
 // Use the raw Lua C API — same approach as OST's LuaConfig.cpp.
 // Do NOT use sol2 or any wrapper.
@@ -24,9 +25,11 @@ extern "C" {
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <sys/inotify.h>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
@@ -69,6 +72,14 @@ namespace LuaLoader {
     // provider (no lua) is unaffected. Pathological many-depot + lua-HTTP installs
     // may exceed the recv-side wait and fall back to a failed (retryable) install.
     static std::mutex g_luaMtx;
+
+    // ── Lua-dir hot-reload (Spec A) ────────────────────────────────────────
+    // g_luaWatcher watches the scanned lua dirs after init(). g_luaDirs is a
+    // process-lifetime store so the const char* paths handed to addDirectory()
+    // stay valid. g_onDepotsChanged is the Spec-B seam (no-op in Spec A).
+    static CFileWatcher* g_luaWatcher = nullptr;
+    static std::vector<std::string> g_luaDirs;
+    static std::atomic<void (*)()> g_onDepotsChanged{nullptr};
 
     // Case-insensitive function registry: lowercase name → C function.
     // Mirrors OST LuaConfig.cpp:g_func_registry.
@@ -578,7 +589,8 @@ namespace LuaLoader {
 
     // Remove every contribution of `path`. refcount→0 ids are erased from ALL
     // lua maps (more thorough than OST, which leaks manifest/token/ticket/stat)
-    // and queued for removal. Caller holds g_fileMtx.
+    // and queued for removal. Caller holds g_luaMtx + g_fileMtx (it mutates both
+    // the lua data maps and the per-file tables).
     void unloadFile(const std::string& path) {
         auto it = g_fileIds.find(path);
         if (it == g_fileIds.end()) return;
@@ -719,6 +731,9 @@ namespace LuaLoader {
             return;
         }
 
+        // Remember this dir so init() can hand it to the FileWatcher for hot-reload.
+        g_luaDirs.push_back(dir);
+
         for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
             if (ec) break;
             if (!entry.is_regular_file()) continue;
@@ -728,6 +743,34 @@ namespace LuaLoader {
             g_pLog->info("LuaLoader: loading %s\n", filePath.c_str());
             parseLuaFile(filePath);
         }
+    }
+
+    // ── Lua-dir hot-reload callback (Spec A) ───────────────────────────────
+    void onDepotsChanged() { if (auto fn = g_onDepotsChanged.load()) fn(); }
+    void setOnDepotsChanged(void (*fn)()) { g_onDepotsChanged.store(fn); }
+
+    // FileWatcher callback (runs on the FileWatcher thread). Reparse the changed
+    // .lua under BOTH locks (lua VM + file tables), then reconcile g_config and
+    // fire the Spec-B seam. No-op until init() has finished building the tables.
+    static void onLuaFileChanged(const std::string& path, uint32_t mask) {
+        if (!initDone()) return;
+        if (path.size() < 4 || path.compare(path.size() - 4, 4, ".lua") != 0) return;
+        {
+            // Lock order g_luaMtx → g_fileMtx (matches everywhere). parseLuaFile runs
+            // the lua VM (g_luaMtx) and impl_addappid stamps the file tables
+            // (g_fileMtx); unloadFile mutates both the lua maps and the file tables.
+            std::lock_guard<std::mutex> luaLock(g_luaMtx);
+            std::lock_guard<std::mutex> fileLock(g_fileMtx);
+            unloadFile(path);  // drop old contributions (the only step for delete/move-out)
+            const bool removed = (mask & (IN_DELETE | IN_MOVED_FROM)) != 0;
+            if (!removed) {
+                parseLuaFile(path);  // re-add (parseLuaFile sets/clears g_currentFile itself)
+            }
+        }
+        // reconcileIntoConfig locks g_fileMtx — call it AFTER releasing the locks
+        // above (std::mutex is non-recursive; double-lock would deadlock).
+        reconcileIntoConfig();
+        onDepotsChanged();
     }
 
     // ── Public entry point ────────────────────────────────────────────────
@@ -814,32 +857,48 @@ namespace LuaLoader {
         // hot-reload merge is safe.
         g_initDone = true;
         g_pLog->info("LuaLoader: init complete\n");
+
+        // Hot-reload: watch each scanned lua dir for .lua add/edit/remove.
+        g_luaWatcher = new CFileWatcher(onLuaFileChanged);
+        for (const auto& dir : g_luaDirs) {
+            g_luaWatcher->addDirectory(dir.c_str());
+        }
+        g_luaWatcher->start();
     }
 
     // ── Query API implementations ─────────────────────────────────────────
 
-    const std::vector<uint8_t>* getKey(uint32_t depotId) {
+    // Query APIs return BY VALUE under g_luaMtx. The lua data maps are written
+    // under g_luaMtx (lua VM execution at init AND the FileWatcher hot-reload
+    // reparse), so a Steam hook thread reading a raw pointer could race a
+    // concurrent reload (unordered_map rehash → iterator/pointer invalidation).
+    // Copying under the lock makes the result safe to use after unlock.
+    std::vector<uint8_t> getKey(uint32_t depotId) {
+        std::lock_guard<std::mutex> lock(g_luaMtx);
         auto it = depotKeys.find(depotId);
-        if (it == depotKeys.end()) return nullptr;
-        return &it->second;
+        if (it == depotKeys.end()) return {};
+        return it->second;
     }
 
-    const ManifestOverride* getManifest(uint32_t depotId) {
+    std::optional<ManifestOverride> getManifest(uint32_t depotId) {
+        std::lock_guard<std::mutex> lock(g_luaMtx);
         auto it = manifestOverrides.find(depotId);
-        if (it == manifestOverrides.end()) return nullptr;
-        return &it->second;
+        if (it == manifestOverrides.end()) return std::nullopt;
+        return it->second;
     }
 
-    const LuaTicket* getAppTicket(uint32_t appId) {
+    std::optional<LuaTicket> getAppTicket(uint32_t appId) {
+        std::lock_guard<std::mutex> lock(g_luaMtx);
         auto it = appTickets.find(appId);
-        if (it == appTickets.end()) return nullptr;
-        return &it->second;
+        if (it == appTickets.end()) return std::nullopt;
+        return it->second;
     }
 
-    const LuaTicket* getEncTicket(uint32_t appId) {
+    std::optional<LuaTicket> getEncTicket(uint32_t appId) {
+        std::lock_guard<std::mutex> lock(g_luaMtx);
         auto it = encTickets.find(appId);
-        if (it == encTickets.end()) return nullptr;
-        return &it->second;
+        if (it == encTickets.end()) return std::nullopt;
+        return it->second;
     }
 
     // Default Steam ID used when setstat has not been called for an app.
@@ -847,6 +906,7 @@ namespace LuaLoader {
     static constexpr uint64_t kDefaultStatSteamId = 76561198028121353ULL;
 
     uint64_t getStatSteamId(uint32_t appId) {
+        std::lock_guard<std::mutex> lock(g_luaMtx);
         auto it = statSteamIds.find(appId);
         if (it == statSteamIds.end()) return kDefaultStatSteamId;
         return it->second;
