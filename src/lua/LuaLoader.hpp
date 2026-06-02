@@ -35,6 +35,8 @@ namespace LuaLoader {
     // Initialize the Lua VM, register all stub bindings, and execute
     // every .lua file found in the three scan directories.
     // Call once after the Steam root is known (i.e. after steamclient.so loads).
+    // Note: the internal lua_State is intentionally process-lifetime — created once
+    // here, never lua_close()'d; it lives until the injected process exits.
     void init();
 
 } // namespace LuaLoader

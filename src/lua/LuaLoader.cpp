@@ -1,5 +1,6 @@
 #include "LuaLoader.hpp"
 
+#include "../config.hpp"
 #include "../globals.hpp"
 #include "../log.hpp"
 
@@ -124,8 +125,7 @@ namespace LuaLoader {
 
         std::error_code ec;
         if (!std::filesystem::is_directory(dir, ec)) {
-            if (g_pLog)
-                g_pLog->debug("LuaLoader: skipping non-existent dir: %s\n", dir.c_str());
+            g_pLog->debug("LuaLoader: skipping non-existent dir: %s\n", dir.c_str());
             return;
         }
 
@@ -135,22 +135,19 @@ namespace LuaLoader {
             if (entry.path().extension() != ".lua") continue;
 
             const std::string filePath = entry.path().string();
-            if (g_pLog)
-                g_pLog->info("LuaLoader: loading %s\n", filePath.c_str());
+            g_pLog->info("LuaLoader: loading %s\n", filePath.c_str());
 
             lua_settop(g_lua, 0);
             int rc = luaL_loadfile(g_lua, filePath.c_str());
             if (rc != LUA_OK) {
-                if (g_pLog)
-                    g_pLog->warn("LuaLoader: compile error in %s: %s\n",
-                                 filePath.c_str(), lua_tostring(g_lua, -1));
+                g_pLog->warn("LuaLoader: compile error in %s: %s\n",
+                             filePath.c_str(), lua_tostring(g_lua, -1));
                 lua_pop(g_lua, 1);
                 continue;
             }
             if (lua_pcall(g_lua, 0, 0, 0) != LUA_OK) {
-                if (g_pLog)
-                    g_pLog->warn("LuaLoader: runtime error in %s: %s\n",
-                                 filePath.c_str(), lua_tostring(g_lua, -1));
+                g_pLog->warn("LuaLoader: runtime error in %s: %s\n",
+                             filePath.c_str(), lua_tostring(g_lua, -1));
                 lua_pop(g_lua, 1);
             }
         }
@@ -163,7 +160,7 @@ namespace LuaLoader {
         // Create Lua VM and open all standard libraries.
         g_lua = luaL_newstate();
         if (!g_lua) {
-            if (g_pLog) g_pLog->warn("LuaLoader: failed to create lua_State\n");
+            g_pLog->warn("LuaLoader: failed to create lua_State\n");
             return;
         }
         luaL_openlibs(g_lua);
@@ -195,7 +192,7 @@ namespace LuaLoader {
         register_func(g_lua, "setnotifyondownloadcomplete", stub_setnotifyondownloadcomplete);
         register_func(g_lua, "setstpropertyforaccount",     stub_setstpropertyforaccount);
 
-        if (g_pLog) g_pLog->info("LuaLoader: VM ready, scanning lua dirs\n");
+        g_pLog->info("LuaLoader: VM ready, scanning lua dirs\n");
 
         // ── Scan directories in priority order ────────────────────────────
         // Later directories override earlier ones (for the same depot) because
@@ -207,29 +204,18 @@ namespace LuaLoader {
             scanDirectory(steamRoot + "/config/stplug-in");
         }
 
-        // 2. User config dir: ~/.config/SLSsteam/lua/*.lua
-        //    (XDG_CONFIG_HOME is honoured, matching CConfig::getDir()).
+        // 2. User config dir: <config>/SLSsteam/lua/*.lua
+        //    Reuse g_config.getDir() which already handles XDG_CONFIG_HOME → ~/.config/SLSsteam.
         {
-            const char* xdg = std::getenv("XDG_CONFIG_HOME");
-            std::string userLuaDir;
-            if (xdg) {
-                userLuaDir = std::string(xdg) + "/SLSsteam/lua";
-            } else {
-                const char* home = std::getenv("HOME");
-                if (home) {
-                    userLuaDir = std::string(home) + "/.config/SLSsteam/lua";
-                }
-            }
-            if (!userLuaDir.empty()) {
-                scanDirectory(userLuaDir);
-            }
+            std::string userLuaDir = g_config.getDir() + "/lua";
+            scanDirectory(userLuaDir);
         }
 
         // 3. Extra directories from yaml lua.paths[] — stubbed empty for T1;
         //    full YAML wiring is a later task.
         // TODO (T_yaml): read g_config yaml node "lua.paths" and scan each.
 
-        if (g_pLog) g_pLog->info("LuaLoader: init complete\n");
+        g_pLog->info("LuaLoader: init complete\n");
     }
 
 } // namespace LuaLoader

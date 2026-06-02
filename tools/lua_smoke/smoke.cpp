@@ -65,7 +65,9 @@ static void init(const std::string& scanDir) {
     lua_setmetatable(g_lua, -2);
     lua_pop(g_lua, 1); // Pop _G.
 
-    // Register all 14 stub bindings (exact set from LuaLoader::init).
+    // MANUAL MIRROR of the registration list in LuaLoader::init() — must be kept
+    // in sync by hand whenever bindings are added or renamed there.
+    // This smoke test inlines its own copy and will NOT catch drift automatically.
     register_func(g_lua, "addappid",                    s_stub);
     register_func(g_lua, "addtoken",                    s_stub);
     register_func(g_lua, "setmanifestid",               s_stub);
