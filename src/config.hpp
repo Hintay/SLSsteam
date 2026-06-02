@@ -53,11 +53,13 @@ public:
 	MTVariable<std::unordered_map<uint32_t, std::string>> gameTitles;
 	MTVariable<std::unordered_map<uint32_t, uint32_t>> subscriptionTimestamps;
 
-	// yaml-origin baselines (load-thread only). reconcileIntoConfig recomputes
-	// addedAppIds = yamlAddedAppIds ∪ lua ownedAppIds (and appTokens likewise) so
-	// that lua hot-REMOVAL propagates instead of a union-only merge that only adds.
-	std::unordered_set<uint32_t> yamlAddedAppIds;
-	std::unordered_map<uint32_t, uint64_t> yamlAppTokens;
+	// yaml-origin baselines. reconcileIntoConfig recomputes addedAppIds =
+	// yamlAddedAppIds ∪ lua ownedAppIds (and appTokens likewise) so lua
+	// hot-REMOVAL propagates instead of a union-only merge that only adds.
+	// MTVariable because loadSettings (config FileWatcher thread) WRITES these
+	// while reconcileIntoConfig (lua FileWatcher thread) READS them.
+	MTVariable<std::unordered_set<uint32_t>> yamlAddedAppIds;
+	MTVariable<std::unordered_map<uint32_t, uint64_t>> yamlAppTokens;
 
 	MTVariable<std::unordered_map<uint32_t, std::unordered_set<uint32_t>>> denuvoGames;
 

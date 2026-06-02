@@ -565,13 +565,13 @@ namespace LuaLoader {
 
         // addedAppIds = yaml baseline ∪ live lua ownedAppIds.
         g_config.addedAppIds.update([](std::unordered_set<uint32_t>& dst) {
-            dst = g_config.yamlAddedAppIds;
+            dst = g_config.yamlAddedAppIds.get();
             for (uint32_t id : ownedAppIds) dst.insert(id);
         });
 
         // appTokens = yaml baseline, lua fills gaps (yaml wins on conflict).
         g_config.appTokens.update([](std::unordered_map<uint32_t, uint64_t>& dst) {
-            dst = g_config.yamlAppTokens;
+            dst = g_config.yamlAppTokens.get();
             for (const auto& [id, tok] : appTokens)
                 if (dst.find(id) == dst.end()) dst[id] = tok;
         });
