@@ -80,6 +80,8 @@ namespace Hooks
 	typedef void(*IClientUser_RunIPCFrame_t)(void*, void*, void*, void*);
 	typedef void(*IClientUserStats_RunIPCFrame_t)(void*, void*, void*, void*);
 
+	typedef int(*GetDepotDecryptionKey_t)(void*, uint32_t, void*);
+
 	typedef uint32_t(*CAPIJob_GetPlayerStats_t)(void*);
 
 	typedef void(*CProtoBufMsgBase_InitFromPacket_t)(CProtoBufMsgBase*, void*);
@@ -104,6 +106,8 @@ namespace Hooks
 	typedef bool(*IClientUtils_GetOfflineMode_t)(void*);
 
 	extern DetourHook<TraceIPC_t> TraceIPC;
+
+	extern DetourHook<GetDepotDecryptionKey_t> GetDepotDecryptionKey;
 
 	extern DetourHook<CAPIJob_GetPlayerStats_t> CAPIJob_GetPlayerStats;
 

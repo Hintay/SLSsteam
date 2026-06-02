@@ -19,6 +19,7 @@
 
 #include "feats/achievements.hpp"
 #include "feats/apps.hpp"
+#include "feats/depotkey.hpp"
 #include "feats/dlc.hpp"
 #include "feats/misc.hpp"
 #include "feats/fakeappid.hpp"
@@ -164,6 +165,19 @@ static void hkTraceIPC(const char* iface, const char* fn)
 			fn
 		);
 	}
+}
+
+static int hkGetDepotDecryptionKey(void* pObject, uint32_t depotId, void* outBuf)
+{
+	// Inject a Lua-provided key when available; outBuf is a pointer-to-pointer
+	// whose target buffer receives the 32-byte key. Returns 1 like the original
+	// loader does on success. Falls through to the real loader otherwise.
+	if (DepotKey::provideKey(depotId, outBuf))
+	{
+		return 1;
+	}
+
+	return Hooks::GetDepotDecryptionKey.tramp.fn(pObject, depotId, outBuf);
 }
 
 static uint32_t hkCAPIJob_GetPlayerStats(void* pAPIJob)
@@ -942,6 +956,8 @@ namespace Hooks
 	DetourHook<IClientUser_RunIPCFrame_t> IClientUser_RunIPCFrame;
 	DetourHook<IClientUserStats_RunIPCFrame_t> IClientUserStats_RunIPCFrame;
 
+	DetourHook<GetDepotDecryptionKey_t> GetDepotDecryptionKey;
+
 	DetourHook<CAPIJob_GetPlayerStats_t> CAPIJob_GetPlayerStats;
 
 	DetourHook<CProtoBufMsgBase_InitFromPacket_t> CProtoBufMsgBase_InitFromPacket;
@@ -995,6 +1011,8 @@ bool Hooks::setup()
 	bool succeeded =
 		TraceIPC.setup(Patterns::TraceIPC, &hkTraceIPC)
 
+		&& GetDepotDecryptionKey.setup(Patterns::GetDepotDecryptionKey, &hkGetDepotDecryptionKey)
+
 		&& CAPIJob_GetPlayerStats.setup(Patterns::CAPIJob::GetPlayerStats, &hkCAPIJob_GetPlayerStats)
 
 		&& CProtoBufMsgBase_InitFromPacket.setup(Patterns::CProtoBufMsgBase::InitFromPacket, &hkProtoBufMsgBase_InitFromPacket)
@@ -1043,6 +1061,8 @@ void Hooks::place()
 	//Detours
 	TraceIPC.place();
 
+	GetDepotDecryptionKey.place();
+
 	CAPIJob_GetPlayerStats.place();
 
 	CProtoBufMsgBase_InitFromPacket.place();
@@ -1082,6 +1102,8 @@ void Hooks::remove()
 {
 	//Detours
 	TraceIPC.remove();
+
+	GetDepotDecryptionKey.remove();
 
 	CAPIJob_GetPlayerStats.remove();
 

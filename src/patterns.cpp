@@ -65,6 +65,18 @@ namespace Patterns
 		std::vector<uint8_t> { 0x56, 0x57, 0xe5, 0x89, 0x55 }
 	};
 
+	Pattern_t GetDepotDecryptionKey
+	{
+		"GetDepotDecryptionKey",
+		// Entry of the depot-key local loader (3-arg, ESP-relative, no EBP frame).
+		// The bare prologue is shared by ~4 sites, so the signature is extended with
+		// function-specific body bytes (stack canary store, arg3 load into ESI,
+		// PUSH 0x80 / PUSH ESI) to resolve to a single location. The PIC thunk call
+		// and the ADD EBX,GOT displacement are wildcarded (build-relative).
+		"57 56 53 E8 ? ? ? ? 81 C3 ? ? ? ? 81 EC 18 01 00 00 65 A1 14 00 00 00 89 84 24 14 01 00 00 31 C0 8B B4 24 30 01 00 00 68 80 00 00 00 56",
+		SigFollowMode::None
+	};
+
 	Pattern_t TraceIPC
 	{
 		"TraceIPC",
