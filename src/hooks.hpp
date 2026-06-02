@@ -82,6 +82,10 @@ namespace Hooks
 
 	typedef int(*GetDepotDecryptionKey_t)(void*, uint32_t, void*);
 
+	// 8-arg cdecl. arg4 (pDepotInfo) is a CUtlVector<DepotEntry>*; typed as void*
+	// here so the header stays decoupled from the sdk layout, the hook casts it.
+	typedef bool(*BuildDepotDependency_t)(void*, uint32_t, void*, void*, void*, void*, uint32_t*, bool*);
+
 	typedef uint32_t(*CAPIJob_GetPlayerStats_t)(void*);
 
 	typedef void(*CProtoBufMsgBase_InitFromPacket_t)(CProtoBufMsgBase*, void*);
@@ -108,6 +112,7 @@ namespace Hooks
 	extern DetourHook<TraceIPC_t> TraceIPC;
 
 	extern DetourHook<GetDepotDecryptionKey_t> GetDepotDecryptionKey;
+	extern DetourHook<BuildDepotDependency_t> BuildDepotDependency;
 
 	extern DetourHook<CAPIJob_GetPlayerStats_t> CAPIJob_GetPlayerStats;
 

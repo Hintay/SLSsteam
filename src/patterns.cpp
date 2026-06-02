@@ -77,6 +77,19 @@ namespace Patterns
 		SigFollowMode::None
 	};
 
+	Pattern_t BuildDepotDependency
+	{
+		"BuildDepotDependency",
+		// Entry of BuildDepotDependency (8-arg, cdecl, EBP frame). The bare
+		// prologue (push ebp; mov ebp,esp; push edi; push esi) is shared by many
+		// sites, so the signature is extended with the distinctive stack reserve
+		// (sub esp,0x22c) and the argument-spill sequence that follows, which
+		// resolves to a single location. The PIC thunk call and the ADD ESI,GOT
+		// displacement are wildcarded (build-relative).
+		"55 89 E5 57 56 E8 ? ? ? ? 81 C6 ? ? ? ? 53 81 EC 2C 02 00 00 8B 45 08 89 85 1C FE FF FF 8B 45 10 89 85 24 FE FF FF",
+		SigFollowMode::None
+	};
+
 	Pattern_t TraceIPC
 	{
 		"TraceIPC",

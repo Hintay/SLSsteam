@@ -21,6 +21,7 @@
 #include "feats/apps.hpp"
 #include "feats/depotkey.hpp"
 #include "feats/dlc.hpp"
+#include "feats/manifest.hpp"
 #include "feats/misc.hpp"
 #include "feats/fakeappid.hpp"
 #include "feats/ticket.hpp"
@@ -178,6 +179,21 @@ static int hkGetDepotDecryptionKey(void* pObject, uint32_t depotId, void* outBuf
 	}
 
 	return Hooks::GetDepotDecryptionKey.tramp.fn(pObject, depotId, outBuf);
+}
+
+static bool hkBuildDepotDependency(void* pUserAppMgr, uint32_t appId, void* pUserConfig, void* pDepotInfo, void* pSharedDepotInfo, void* pSteamApp, uint32_t* pBuildId, bool* pbBetaFallback)
+{
+	// Run the original first so the depot vector is fully populated, then pin
+	// each entry's manifest GID/size from the Lua layer. ret == false means
+	// browse/verify mode (empty vector); we still pass through cleanly.
+	const bool ret = Hooks::BuildDepotDependency.tramp.fn(pUserAppMgr, appId, pUserConfig, pDepotInfo, pSharedDepotInfo, pSteamApp, pBuildId, pbBetaFallback);
+
+	if (pDepotInfo)
+	{
+		Manifest::patchDepotInfo(reinterpret_cast<CUtlVector<DepotEntry>*>(pDepotInfo));
+	}
+
+	return ret;
 }
 
 static uint32_t hkCAPIJob_GetPlayerStats(void* pAPIJob)
@@ -957,6 +973,7 @@ namespace Hooks
 	DetourHook<IClientUserStats_RunIPCFrame_t> IClientUserStats_RunIPCFrame;
 
 	DetourHook<GetDepotDecryptionKey_t> GetDepotDecryptionKey;
+	DetourHook<BuildDepotDependency_t> BuildDepotDependency;
 
 	DetourHook<CAPIJob_GetPlayerStats_t> CAPIJob_GetPlayerStats;
 
@@ -1012,6 +1029,7 @@ bool Hooks::setup()
 		TraceIPC.setup(Patterns::TraceIPC, &hkTraceIPC)
 
 		&& GetDepotDecryptionKey.setup(Patterns::GetDepotDecryptionKey, &hkGetDepotDecryptionKey)
+		&& BuildDepotDependency.setup(Patterns::BuildDepotDependency, &hkBuildDepotDependency)
 
 		&& CAPIJob_GetPlayerStats.setup(Patterns::CAPIJob::GetPlayerStats, &hkCAPIJob_GetPlayerStats)
 
@@ -1062,6 +1080,7 @@ void Hooks::place()
 	TraceIPC.place();
 
 	GetDepotDecryptionKey.place();
+	BuildDepotDependency.place();
 
 	CAPIJob_GetPlayerStats.place();
 
@@ -1104,6 +1123,7 @@ void Hooks::remove()
 	TraceIPC.remove();
 
 	GetDepotDecryptionKey.remove();
+	BuildDepotDependency.remove();
 
 	CAPIJob_GetPlayerStats.remove();
 
