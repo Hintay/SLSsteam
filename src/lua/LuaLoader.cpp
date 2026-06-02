@@ -543,31 +543,37 @@ namespace LuaLoader {
     //
     // depotKeys and manifestOverrides are lua-only (no yaml counterpart).
     //
-    // THREADING NOTE: this runs at init() (single-threaded startup) AND on yaml
+    // THREADING NOTE: runs at init() (single-threaded startup) AND on lua/yaml
     // hot-reload from the FileWatcher thread while Steam worker threads read these
-    // maps. Each merge therefore uses MTVariable::update() so the read-modify-write
-    // happens atomically under the writer lock instead of a racy get()+set().
-    void mergeIntoConfig() {
-        // Merge ownedAppIds (plain union — add every lua-registered id).
-        g_config.addedAppIds.update([](std::unordered_set<uint32_t>& existing) {
-            for (uint32_t id : ownedAppIds) {
-                existing.insert(id);
-            }
-        });
-        g_pLog->info("LuaLoader: merged %zu ownedAppIds into g_config.addedAppIds\n",
-                     ownedAppIds.size());
+    // maps. Each write uses MTVariable::update() for an atomic RMW. Unlike a
+    // union-only merge this RECOMPUTES addedAppIds/appTokens from the yaml baselines
+    // ∪ the live lua tables, so a lua hot-REMOVAL (unloadFile) actually drops the id
+    // from g_config instead of lingering until restart.
+    void reconcileIntoConfig() {
+        std::lock_guard<std::mutex> lock(g_fileMtx);  // stable read of g_purchaseTime
 
-        // Merge appTokens: yaml wins on conflict, lua fills gaps.
-        size_t added = 0;
-        g_config.appTokens.update([&added](std::unordered_map<uint32_t, uint64_t>& existing) {
-            for (const auto& [appId, token] : appTokens) {
-                if (existing.find(appId) == existing.end()) {
-                    existing[appId] = token;
-                    ++added;
-                }
-            }
+        // addedAppIds = yaml baseline ∪ live lua ownedAppIds.
+        g_config.addedAppIds.update([](std::unordered_set<uint32_t>& dst) {
+            dst = g_config.yamlAddedAppIds;
+            for (uint32_t id : ownedAppIds) dst.insert(id);
         });
-        g_pLog->info("LuaLoader: merged %zu new appTokens into g_config.appTokens\n", added);
+
+        // appTokens = yaml baseline, lua fills gaps (yaml wins on conflict).
+        g_config.appTokens.update([](std::unordered_map<uint32_t, uint64_t>& dst) {
+            dst = g_config.yamlAppTokens;
+            for (const auto& [id, tok] : appTokens)
+                if (dst.find(id) == dst.end()) dst[id] = tok;
+        });
+
+        // subscriptionTimestamps: lua mtimes fill gaps (yaml/real wins). Not reset
+        // to a baseline (no yaml baseline kept); a removed app's stamp may linger,
+        // which is harmless.
+        g_config.subscriptionTimestamps.update([](std::unordered_map<uint32_t, uint32_t>& dst) {
+            for (const auto& [id, mt] : g_purchaseTime)
+                if (dst.find(id) == dst.end()) dst[id] = mt;
+        });
+
+        g_pLog->info("LuaLoader: reconciled %zu owned ids into g_config\n", ownedAppIds.size());
     }
 
     // Remove every contribution of `path`. refcount→0 ids are erased from ALL
@@ -801,7 +807,7 @@ namespace LuaLoader {
         }
 
         // ── Union lua tables into g_config ────────────────────────────────
-        mergeIntoConfig();
+        reconcileIntoConfig();
 
         // Publish readiness last: the source tables (ownedAppIds/appTokens/…) are
         // now fully built and will only be read from here on, so a concurrent

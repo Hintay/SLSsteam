@@ -42,14 +42,14 @@ namespace LuaLoader {
 
     // True once init() has finished building all lua tables. The FileWatcher
     // hot-reload path (CConfig::loadSettings) checks this before calling
-    // mergeIntoConfig() so it never races init()'s table construction.
+    // reconcileIntoConfig() so it never races init()'s table construction.
     bool initDone();
 
     // Union the lua-provided ownedAppIds/appTokens into g_config. Called by init()
     // and again at the end of CConfig::loadSettings() so a yaml hot-reload (which
     // overwrites those fields wholesale) does not drop lua-defined apps. Safe to
     // call before init() — operates on the (then empty) tables.
-    void mergeIntoConfig();
+    void reconcileIntoConfig();
 
     void unloadFile(const std::string& path);
     std::vector<uint32_t> getAllDepotIds();

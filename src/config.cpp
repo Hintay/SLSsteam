@@ -167,6 +167,11 @@ bool CConfig::loadSettings()
 	gameTitles = getMap<uint32_t, std::string>(node, "GameTitles");
 	subscriptionTimestamps = getMap<uint32_t, uint32_t>(node, "SubscriptionTimestamps");
 
+	// Remember the yaml-origin sets so reconcileIntoConfig can recompute against
+	// the live lua tables (supports lua hot-removal, not just union add).
+	yamlAddedAppIds = addedAppIds.get();
+	yamlAppTokens   = appTokens.get();
+
 	//Do not warn for these (yet?)
 	const auto idleStatusNode = node["IdleStatus"];
 	if (idleStatusNode)
@@ -348,7 +353,7 @@ bool CConfig::loadSettings()
 	// (the tables are frozen, read-only).
 	if (LuaLoader::initDone())
 	{
-		LuaLoader::mergeIntoConfig();
+		LuaLoader::reconcileIntoConfig();
 	}
 
 	return true;
