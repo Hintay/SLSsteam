@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 
@@ -19,7 +20,8 @@ template<typename T>
 struct CUtlVector
 {
 	CUtlMemory<T> m_Memory; // 0x00 — base at m_Memory.m_pMemory
-	uint32_t      m_Size;   // 0x0c — element count
+	int32_t       m_Size;   // 0x0c — element count (signed in Valve's CUtlVector;
+	                        //        a negative sentinel yields zero iterations, not an overrun)
 };
 
 // Single depot manifest entry (0x20 bytes) produced by BuildDepotDependency.
@@ -36,3 +38,9 @@ struct DepotEntry
 	uint8_t  Padding;       // 0x1F
 };
 static_assert(sizeof(DepotEntry) == 0x20, "DepotEntry must be 32 bytes");
+// Guard the offsets the manifest hook reads/writes: a future field reorder that
+// preserved total size would otherwise silently shift these into Steam-owned memory.
+static_assert(offsetof(DepotEntry, DepotId)      == 0x00, "DepotId offset");
+static_assert(offsetof(DepotEntry, ManifestGid)  == 0x08, "ManifestGid offset");
+static_assert(offsetof(DepotEntry, ManifestSize) == 0x10, "ManifestSize offset");
+static_assert(offsetof(DepotEntry, DlcAppId)     == 0x18, "DlcAppId offset");

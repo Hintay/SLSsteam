@@ -12,7 +12,7 @@ void Manifest::patchDepotInfo(CUtlVector<DepotEntry>* pDepotInfo)
 		return;
 	}
 
-	for (uint32_t i = 0; i < pDepotInfo->m_Size; ++i)
+	for (int32_t i = 0; i < pDepotInfo->m_Size; ++i)
 	{
 		DepotEntry& entry = entries[i];
 
