@@ -40,6 +40,12 @@ namespace LuaLoader {
     // here, never lua_close()'d; it lives until the injected process exits.
     void init();
 
+    // Union the lua-provided ownedAppIds/appTokens into g_config. Called by init()
+    // and again at the end of CConfig::loadSettings() so a yaml hot-reload (which
+    // overwrites those fields wholesale) does not drop lua-defined apps. Safe to
+    // call before init() — operates on the (then empty) tables.
+    void mergeIntoConfig();
+
     // ── Query APIs (T2) ───────────────────────────────────────────────────────
 
     // Returns a pointer to the 32-byte depot decryption key for depotId,

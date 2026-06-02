@@ -3,6 +3,7 @@
 #include "config_default.hpp"
 #include "filewatcher.hpp"
 #include "log.hpp"
+#include "lua/LuaLoader.hpp"
 #include "lua/ManifestProvider.hpp"
 #include "yaml-cpp/yaml.h"
 
@@ -334,6 +335,12 @@ bool CConfig::loadSettings()
 			break;
 	}
 
+	// Re-apply the lua union after the yaml fields (addedAppIds/appTokens) were
+	// overwritten wholesale above. This matters on FileWatcher hot-reload, where
+	// loadSettings() re-runs but LuaLoader::init() does NOT — without this, lua-only
+	// appIds would vanish from g_config until a restart. No-op before LuaLoader::init()
+	// (its tables are empty), so the startup ordering (loadSettings → init) is unaffected.
+	LuaLoader::mergeIntoConfig();
 
 	return true;
 }

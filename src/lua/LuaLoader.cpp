@@ -526,7 +526,7 @@ namespace LuaLoader {
     // THREADING NOTE: this function does read-modify-write on MTVariable fields
     // (get → mutate → set) which is only safe because init() runs single-threaded
     // at startup before Steam worker threads touch config; do NOT call from a hot path.
-    static void mergeIntoConfig() {
+    void mergeIntoConfig() {
         // Merge ownedAppIds (plain union — add every lua-registered id).
         {
             auto existing = g_config.addedAppIds.get();
