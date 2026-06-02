@@ -58,6 +58,8 @@ Ticket::SavedTicket Ticket::getCachedTicket(uint32_t appId)
 		SavedTicket ticket {};
 		ticket.steamId = luaTkt->steamId;
 		ticket.ticket  = std::string(luaTkt->bytes.begin(), luaTkt->bytes.end());
+		// Intentionally NOT stored in ticketMap: lua tickets must stay in-memory
+		// only, or they would survive removal of the .lua file that defined them.
 		return ticket;
 	}
 
@@ -186,6 +188,7 @@ Ticket::SavedTicket Ticket::getCachedEncryptedTicket(uint32_t appId)
 		g_pLog->debug("Using lua encrypted ticket for %u\n", appId);
 		ticket.steamId = luaTkt->steamId; // 0 for encrypted tickets
 		ticket.ticket  = std::string(luaTkt->bytes.begin(), luaTkt->bytes.end());
+		// In-memory only, same rule as the app-ticket path above.
 		return ticket;
 	}
 
@@ -273,6 +276,10 @@ void Ticket::recvEncryptedAppTicket(CMsgClientRequestEncryptedAppTicketResponse*
 	}
 
 	SavedTicket ticket = getCachedEncryptedTicket(msg->app_id());
+	// steamId==0 means either no cached ticket, or a lua-provided raw encrypted
+	// ticket (seteticket). Raw lua bytes are NOT replayed here because they are
+	// not protobuf-wrapped; completing this path requires wrapping them in a
+	// CMsgClientRequestEncryptedAppTicketResponse (deferred — see seteticket).
 	if(!ticket.steamId)
 	{
 		return;
