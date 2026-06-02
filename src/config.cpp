@@ -270,11 +270,13 @@ bool CConfig::loadSettings()
 		setError(ELoadError::MissingKey);
 	}
 
-	// manifest.provider — optional nested section; default "wudrm" if missing.
+	// manifest.provider — optional nested section; default "opensteamtool" if
+	// missing (matches OST). Users who need the China-friendly wudrm mirror can
+	// set `manifest.provider: wudrm`.
 	// Calls ManifestProvider::setProvider() so the HTTP fallback uses the right URL.
 	{
 		const auto manifestNode = node["manifest"];
-		std::string provider = "wudrm";
+		std::string provider = "opensteamtool";
 		if (manifestNode && manifestNode["provider"])
 		{
 			try

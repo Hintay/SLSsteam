@@ -69,17 +69,20 @@ struct Provider {
     Parser      parse;
 };
 
-// Mirrors OST kProviders (wudrm default per task spec).
-// opensteamtool removed — wudrm is the T6 default as specified.
+// Mirrors OST kProviders exactly: opensteamtool (default), wudrm, steamrun.
+// NOTE: wudrm is plain HTTP and is the provider OST recommends for users in
+// China; if the opensteamtool default is unreachable, set
+// `manifest.provider: wudrm` in config.yaml.
 static const Provider kProviders[] = {
+    { "opensteamtool", "https://manifest.opensteamtool.com/{gid}",      parsePlainUint    },
     // Plain HTTP is intentional: matches the upstream OST provider URL.
     // The Steam chunk-hash check is the final integrity backstop; do NOT change to https
     // until the endpoint's https support has been verified.
-    { "wudrm",     "http://gmrc.wudrm.com/manifest/{gid}",            parsePlainUint    },
-    { "steamrun",  "https://manifest.steam.run/api/manifest/{gid}",   parseSteamRunJson },
+    { "wudrm",         "http://gmrc.wudrm.com/manifest/{gid}",          parsePlainUint    },
+    { "steamrun",      "https://manifest.steam.run/api/manifest/{gid}", parseSteamRunJson },
 };
 
-static const Provider* g_active = &kProviders[0]; // default: wudrm
+static const Provider* g_active = &kProviders[0]; // default: opensteamtool (matches OST)
 
 // ── Public API ──────────────────────────────────────────────────────────────
 

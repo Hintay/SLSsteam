@@ -208,8 +208,11 @@ namespace LuaLoader {
     }
 
     // setmanifestid(depotId, "gid_str" [, size])
-    // Mirrors OST LuaConfig.cpp::lua_setManifestid.
-    // Size omitted → stored as 0 (keep original size later).
+    // Mirrors OST LuaConfig.cpp::lua_setManifestid, INCLUDING OST's rule that the
+    // size is ALWAYS forced to 0: the GID already pins the exact manifest content,
+    // so a caller-supplied size only changes the download-size *display* and a
+    // wrong value can break Steam's download. The optional 3rd arg is accepted
+    // for script compatibility but ignored.
     static int impl_setmanifestid(lua_State* L) {
         int argc = lua_gettop(L);
         if (argc < 2)
@@ -230,26 +233,8 @@ namespace LuaLoader {
         if (!parseU64Decimal(gidStr, gid))
             return luaL_error(L, "setmanifestid: gid must be all decimal digits");
 
-        uint64_t size = 0;
-        if (argc >= 3) {
-            // Check most-specific types first: in Lua 5.4, lua_isstring returns
-            // true for numbers, so the integer/number branches must come before
-            // the string branch to avoid them becoming dead code.
-            if (lua_isinteger(L, 3)) {
-                lua_Integer rawSize = lua_tointeger(L, 3);
-                size = (rawSize >= 0) ? static_cast<uint64_t>(rawSize) : 0;
-            } else if (lua_isnumber(L, 3)) {
-                double rawSize = lua_tonumber(L, 3);
-                size = (rawSize >= 0) ? static_cast<uint64_t>(rawSize) : 0;
-            } else if (lua_isstring(L, 3)) {
-                // Tolerate size passed as a numeric string.
-                const char* sizeStr = lua_tostring(L, 3);
-                if (!parseU64Decimal(sizeStr, size)) {
-                    g_pLog->warn("LuaLoader: setmanifestid(%u): invalid size string, using 0\n", depotId);
-                    size = 0;
-                }
-            }
-        }
+        // Forced to 0, matching OST — see the function comment above. arg3 ignored.
+        const uint64_t size = 0;
 
         manifestOverrides[depotId] = ManifestOverride{ gid, size };
         g_pLog->debug("LuaLoader: setmanifestid(%u, gid=%llu, size=%llu)\n",
