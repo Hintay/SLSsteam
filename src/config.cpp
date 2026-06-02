@@ -70,8 +70,10 @@ bool CConfig::createFile()
 	return true;
 }
 
-static void onFileChange()
+static void onFileChange(const std::string& path, uint32_t mask)
 {
+	(void)path;
+	(void)mask;
 	g_config.loadSettings();
 }
 
