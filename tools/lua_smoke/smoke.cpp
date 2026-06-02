@@ -536,6 +536,36 @@ static bool fetchManifestCode(uint32_t appId, uint32_t depotId,
 
 } // namespace SmokeLoader
 
+// ── T2: Self-contained refcount bookkeeping mirror ───────────────────────────
+
+struct SmokeFileTrack {
+    std::unordered_map<std::string, std::unordered_set<uint32_t>> fileIds;
+    std::unordered_map<uint32_t, uint32_t> refCount;
+    std::vector<uint32_t> pendingAdd, pendingRemove;
+    void addId(const std::string& f, uint32_t id) {
+        if (fileIds[f].insert(id).second && ++refCount[id] == 1) pendingAdd.push_back(id);
+    }
+    void unload(const std::string& f) {
+        auto it = fileIds.find(f); if (it == fileIds.end()) return;
+        for (uint32_t id : it->second)
+            if (--refCount[id] == 0) { refCount.erase(id); pendingRemove.push_back(id); }
+        fileIds.erase(it);
+    }
+};
+
+static void test_refcount() {
+    SmokeFileTrack t;
+    t.addId("a.lua", 100); t.addId("b.lua", 100); t.addId("a.lua", 200);
+    assert(t.refCount[100] == 2 && t.refCount[200] == 1);
+    t.unload("a.lua");
+    assert(t.refCount[100] == 1);
+    assert(t.refCount.find(200) == t.refCount.end());
+    assert(t.pendingRemove.size() == 1 && t.pendingRemove[0] == 200);
+    t.unload("b.lua");
+    assert(t.refCount.find(100) == t.refCount.end());
+    std::printf("test_refcount OK\n");
+}
+
 // ── Mirror of LuaLoader::parseLuaFile (incremental per-line parser) ──────────
 static int smoke_parseLuaString(lua_State* L, const std::string& src) {
     int executed = 0;
@@ -1000,6 +1030,9 @@ int main() {
 
     // ── Task 1: incremental per-line parser ──────────────────────────────
     test_incremental_parser();
+
+    // ── Task 2: per-file refcount bookkeeping ────────────────────────────
+    test_refcount();
 
     // Cleanup temp files.
     std::error_code ec;

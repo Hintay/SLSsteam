@@ -17,6 +17,7 @@ extern "C" {
 #include <atomic>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -26,7 +27,10 @@ extern "C" {
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace LuaLoader {
 
@@ -38,6 +42,18 @@ namespace LuaLoader {
     std::unordered_map<uint32_t, uint64_t>              statSteamIds;
     std::unordered_map<uint32_t, LuaTicket>             appTickets;
     std::unordered_map<uint32_t, LuaTicket>             encTickets;
+
+    // ── Per-file lifecycle tracking (Spec A) ───────────────────────────────
+    // All guarded by g_fileMtx. g_currentFile is set only inside the locked
+    // parse flow; addappid stamps the file→id / refcount / mtime tables.
+    std::string                                                   g_currentFile;
+    std::unordered_map<std::string, std::unordered_set<uint32_t>> g_fileIds;
+    std::unordered_map<uint32_t, uint32_t>                        g_idRefCount;
+    std::unordered_map<std::string, uint32_t>                     g_fileMtime;
+    std::unordered_map<uint32_t, uint32_t>                        g_purchaseTime;
+    std::vector<uint32_t>                                         g_pendingAdditions;
+    std::vector<uint32_t>                                         g_pendingRemovals;
+    std::mutex                                                    g_fileMtx;
 
     // ── Internal state ─────────────────────────────────────────────────────
     static lua_State* g_lua = nullptr;
@@ -161,6 +177,20 @@ namespace LuaLoader {
 
         uint32_t id = static_cast<uint32_t>(raw);
         ownedAppIds.insert(id);
+
+        // Register this id's contribution to the current file (refcount + mtime).
+        // g_fileMtx is already held by the caller (parseLuaFile flow); during a
+        // bare addappid outside parsing g_currentFile is empty → no-op.
+        if (!g_currentFile.empty()) {
+            if (g_fileIds[g_currentFile].insert(id).second && ++g_idRefCount[id] == 1) {
+                g_pendingAdditions.push_back(id);
+            }
+            auto mt = g_fileMtime.find(g_currentFile);
+            if (mt != g_fileMtime.end()) {
+                uint32_t& slot = g_purchaseTime[id];
+                if (mt->second > slot) slot = mt->second;
+            }
+        }
 
         // Arg 3: optional 64-hex-char depot key (arg 2 is the DLC flag).
         if (argc >= 3) {
@@ -579,6 +609,18 @@ namespace LuaLoader {
             g_pLog->warn("LuaLoader: failed to open %s\n", filePath.c_str());
             return;
         }
+        {
+            std::error_code ec;
+            auto ft = std::filesystem::last_write_time(filePath, ec);
+            uint32_t mtime = 0;
+            if (!ec) {
+                auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                    ft - decltype(ft)::clock::now() + std::chrono::system_clock::now());
+                mtime = static_cast<uint32_t>(std::chrono::system_clock::to_time_t(sctp));
+            }
+            g_fileMtime[filePath] = mtime;
+        }
+        g_currentFile = filePath;
         std::string chunk, line;
         int lineNo = 0;
         while (std::getline(file, line)) {
@@ -615,6 +657,7 @@ namespace LuaLoader {
         if (!chunk.empty()) {
             g_pLog->warn("LuaLoader: %s: incomplete statement at end of file\n", filePath.c_str());
         }
+        g_currentFile.clear();
     }
 
     // ── Directory scanner ─────────────────────────────────────────────────
