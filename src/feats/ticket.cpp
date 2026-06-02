@@ -4,6 +4,7 @@
 
 #include "../config.hpp"
 #include "../globals.hpp"
+#include "../lua/LuaLoader.hpp"
 
 #include "../sdk/CProtoBufMsgBase.hpp"
 #include "../sdk/CSteamEngine.hpp"
@@ -48,6 +49,18 @@ std::string Ticket::getTicketPath(uint32_t appId)
 
 Ticket::SavedTicket Ticket::getCachedTicket(uint32_t appId)
 {
+	// Lua-provided tickets take priority over the runtime cache and disk.
+	// They live only in memory — no disk read/write; see LuaLoader T7.
+	const LuaLoader::LuaTicket* luaTkt = LuaLoader::getAppTicket(appId);
+	if (luaTkt)
+	{
+		g_pLog->debug("Using lua app ticket for %u (steamId=0x%08x)\n", appId, luaTkt->steamId);
+		SavedTicket ticket {};
+		ticket.steamId = luaTkt->steamId;
+		ticket.ticket  = std::string(luaTkt->bytes.begin(), luaTkt->bytes.end());
+		return ticket;
+	}
+
 	if (ticketMap.contains(appId))
 	{
 		return ticketMap[appId];
@@ -84,6 +97,15 @@ bool Ticket::saveTicketToCache(CMsgClientGetAppOwnershipTicketResponse* resp)
 
 	g_pLog->debug("Saving ticket for %u...\n", appId);
 
+	// Do not write to disk if a lua-provided ticket is registered for this app.
+	// The lua ticket wins; writing the real ticket would go stale if the .lua
+	// file is later removed or edited.
+	if (LuaLoader::getAppTicket(appId))
+	{
+		g_pLog->debug("Skipping disk write for ticket %u — lua ticket takes priority\n", appId);
+		return true;
+	}
+
 	auto bytes = resp->ticket();
 
 	YAML::Emitter node;
@@ -105,7 +127,7 @@ bool Ticket::saveTicketToCache(CMsgClientGetAppOwnershipTicketResponse* resp)
 	SavedTicket ticket {};
 	ticket.ticket = bytes;
 	ticketMap[appId] = ticket;
-	
+
 	return true;
 }
 
@@ -154,6 +176,19 @@ Ticket::SavedTicket Ticket::getCachedEncryptedTicket(uint32_t appId)
 		return ticket;
 	}
 
+	// Lua-provided encrypted tickets take priority over the runtime cache and disk.
+	// steamId is 0 for encrypted tickets (no plaintext SteamID available), so the
+	// GetSteamId hook falls back to oneTimeSteamIdSpoof from the app ticket path.
+	// The protobuf replay path in recvEncryptedAppTicket also skips if steamId==0.
+	const LuaLoader::LuaTicket* luaTkt = LuaLoader::getEncTicket(appId);
+	if (luaTkt)
+	{
+		g_pLog->debug("Using lua encrypted ticket for %u\n", appId);
+		ticket.steamId = luaTkt->steamId; // 0 for encrypted tickets
+		ticket.ticket  = std::string(luaTkt->bytes.begin(), luaTkt->bytes.end());
+		return ticket;
+	}
+
 	if (encryptedTicketMap.contains(appId))
 	{
 		return encryptedTicketMap[appId];
@@ -193,6 +228,14 @@ bool Ticket::saveEncryptedTicketToCache(CMsgClientRequestEncryptedAppTicketRespo
 	const uint32_t appId = resp->app_id();
 
 	g_pLog->debug("Saving encrypted ticket for %u...\n", appId);
+
+	// Do not write to disk if a lua-provided encrypted ticket is registered.
+	// The lua ticket wins; the real auto-cached ticket must not clobber it.
+	if (LuaLoader::getEncTicket(appId))
+	{
+		g_pLog->debug("Skipping disk write for encrypted ticket %u — lua ticket takes priority\n", appId);
+		return true;
+	}
 
 	auto bytes = resp->SerializeAsString();
 

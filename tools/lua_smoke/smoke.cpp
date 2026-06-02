@@ -1,6 +1,6 @@
-// Smoke test for LuaLoader T1+T2+T6.
+// Smoke test for LuaLoader T1+T2+T6+T7.
 // Self-contained: no SLSsteam internal headers, no libmem, no yaml-cpp, no libcurl.
-// Inlines the same Lua VM setup logic and real T2/T6 binding implementations
+// Inlines the same Lua VM setup logic and real T2/T6/T7 binding implementations
 // as LuaLoader.cpp to verify:
 //   T1: The Lua VM can be created.
 //   T1: The case-insensitive __index metamethod resolves mixed-case names.
@@ -15,6 +15,10 @@
 //   T6: Lua stack is balanced across pcall / result-read.
 //   T6: http_get accepts an optional headers table arg (smoke stub).
 //   T6: http_post is now a real binding (validates 2 required args in smoke).
+//   T7: setappticket hex-decode, SteamID extraction from offset 8 (little-endian).
+//   T7: setappticket malformed input is silently skipped (warn+skip, no crash).
+//   T7: seteticket hex-decode stored with steamId=0.
+//   T7: getAppTicket / getEncTicket query APIs return correct entries.
 
 #include <cassert>
 #include <cctype>
@@ -51,6 +55,11 @@ static std::unordered_set<uint32_t> g_ownedAppIds;
 // App access tokens.
 static std::unordered_map<uint32_t, uint64_t> g_appTokens;
 
+// T7: In-memory ticket tables (mirrors LuaLoader::appTickets / encTickets).
+struct LuaTicket { uint32_t steamId; std::vector<uint8_t> bytes; };
+static std::unordered_map<uint32_t, LuaTicket> g_appTickets;
+static std::unordered_map<uint32_t, LuaTicket> g_encTickets;
+
 static lua_State* g_lua = nullptr;
 static std::unordered_map<std::string, lua_CFunction> g_func_registry;
 static bool g_had_error = false;
@@ -73,6 +82,21 @@ static bool parseHex64(const char* hex, std::vector<uint8_t>& out) {
     std::vector<uint8_t> result;
     result.reserve(32);
     for (int i = 0; i < 64; i += 2) {
+        int hi = hexNibble(hex[i]);
+        int lo = hexNibble(hex[i + 1]);
+        if (hi < 0 || lo < 0) return false;
+        result.push_back(static_cast<uint8_t>((hi << 4) | lo));
+    }
+    out = std::move(result);
+    return true;
+}
+
+// T7: parse variable-length hex string into bytes (mirrors LuaLoader::parseHexBytes).
+static bool parseHexBytes(const char* hex, size_t hexLen, std::vector<uint8_t>& out) {
+    if (hexLen == 0 || hexLen % 2 != 0) return false;
+    std::vector<uint8_t> result;
+    result.reserve(hexLen / 2);
+    for (size_t i = 0; i < hexLen; i += 2) {
         int hi = hexNibble(hex[i]);
         int lo = hexNibble(hex[i + 1]);
         if (hi < 0 || lo < 0) return false;
@@ -316,7 +340,70 @@ static int impl_http_post(lua_State* L) {
     return 2;
 }
 
-// Remaining stubs (T7/T8).
+// T7: real setappticket implementation (mirrors LuaLoader::impl_setappticket).
+static int impl_setappticket(lua_State* L) {
+    int argc = lua_gettop(L);
+    if (argc < 2 || !lua_isinteger(L, 1) || !lua_isstring(L, 2)) {
+        lua_pushstring(L, "setappticket: need integer appid and hex string");
+        return lua_error(L);
+    }
+    lua_Integer raw = lua_tointeger(L, 1);
+    if (raw < 0 || raw > static_cast<lua_Integer>(UINT32_MAX)) {
+        lua_pushstring(L, "setappticket: appid out of range");
+        return lua_error(L);
+    }
+    uint32_t appId = static_cast<uint32_t>(raw);
+
+    size_t hexLen = 0;
+    const char* hex = lua_tolstring(L, 2, &hexLen);
+
+    std::vector<uint8_t> bytes;
+    if (!parseHexBytes(hex, hexLen, bytes)) {
+        // Malformed input: warn and skip without crashing (matches LuaLoader behaviour).
+        fprintf(stderr, "[smoke] setappticket(%u): malformed hex, skipping\n", appId);
+        return 0;
+    }
+
+    // Extract SteamID AccountID: little-endian uint64 at byte offset 8, take low 32 bits.
+    uint32_t steamId = 0;
+    if (bytes.size() >= 16) {
+        uint64_t sid64 = 0;
+        for (int i = 7; i >= 0; --i)
+            sid64 = (sid64 << 8) | bytes[8 + static_cast<size_t>(i)];
+        steamId = static_cast<uint32_t>(sid64 & 0xFFFFFFFFULL);
+    }
+    g_appTickets[appId] = LuaTicket{ steamId, std::move(bytes) };
+    return 0;
+}
+
+// T7: real seteticket implementation (mirrors LuaLoader::impl_seteticket).
+static int impl_seteticket(lua_State* L) {
+    int argc = lua_gettop(L);
+    if (argc < 2 || !lua_isinteger(L, 1) || !lua_isstring(L, 2)) {
+        lua_pushstring(L, "seteticket: need integer appid and hex string");
+        return lua_error(L);
+    }
+    lua_Integer raw = lua_tointeger(L, 1);
+    if (raw < 0 || raw > static_cast<lua_Integer>(UINT32_MAX)) {
+        lua_pushstring(L, "seteticket: appid out of range");
+        return lua_error(L);
+    }
+    uint32_t appId = static_cast<uint32_t>(raw);
+
+    size_t hexLen = 0;
+    const char* hex = lua_tolstring(L, 2, &hexLen);
+
+    std::vector<uint8_t> bytes;
+    if (!parseHexBytes(hex, hexLen, bytes)) {
+        fprintf(stderr, "[smoke] seteticket(%u): malformed hex, skipping\n", appId);
+        return 0;
+    }
+    // Encrypted tickets carry no plaintext SteamID; steamId=0.
+    g_encTickets[appId] = LuaTicket{ 0, std::move(bytes) };
+    return 0;
+}
+
+// Remaining stubs (T8).
 static int s_stub(lua_State*) { return 0; }
 
 // ── Case-insensitive VM helpers ───────────────────────────────────────────
@@ -363,8 +450,8 @@ static void init(const std::string& scanDir) {
     register_func(g_lua, "fetch_manifest_code_ex",      impl_fetch_manifest_code_ex);
     register_func(g_lua, "http_get",                    impl_http_get);
     register_func(g_lua, "http_post",                   impl_http_post);
-    register_func(g_lua, "setappticket",                s_stub);
-    register_func(g_lua, "seteticket",                  s_stub);
+    register_func(g_lua, "setappticket",                impl_setappticket);
+    register_func(g_lua, "seteticket",                  impl_seteticket);
     register_func(g_lua, "setstat",                     s_stub);
     register_func(g_lua, "downloadapp",                 s_stub);
     register_func(g_lua, "addnonowneddepot",            s_stub);
@@ -598,9 +685,22 @@ int main() {
         f << "local r, st2 = Http_Post(\"http://x\", \"body\", {[\"Content-Type\"]=\"text/plain\"})\n";
         f << "assert(type(st2) == \"number\", \"http_post status must be number\")\n";
 
-        // Remaining stubs — just verify they don't crash.
-        f << "SetAppTicket(1, \"deadbeef\")\n";
-        f << "SETETICKET(1, \"deadbeef\")\n";
+        // T7: setappticket with a crafted 28-byte ticket.
+        // Byte layout (little-endian):
+        //   [0..3]  = 14 00 00 00  (Size field, LE)
+        //   [4..7]  = 01 00 00 00  (Version field, LE)
+        //   [8..15] = 10 00 00 01 10 00 00 01  (SteamID LE = 0x0100001001000010)
+        //   [16..27]= 00 * 12     (padding)
+        // SteamID low 32 bits = 0x01000010 = 16777232.
+        // Hex: "14000000010000001000000110000001" (32) + "0000000000000000" (16) + "00000000" (8) = 56 hex = 28 bytes.
+        f << "SetAppTicket(55555, \"14000000010000001000000110000001\" .. \"0000000000000000\" .. \"00000000\")\n";
+        // T7: setappticket with a too-short ticket (< 16 bytes) — steamId should be 0.
+        f << "SetAppTicket(66666, \"deadbeef\")\n";
+        // T7: setappticket malformed hex (odd length) — should warn+skip, no crash.
+        f << "SetAppTicket(77777, \"abc\")\n";
+        // T7: seteticket — store encrypted ticket bytes, steamId=0.
+        f << "SETETICKET(55555, \"cafebabe0102030405060708\")\n";
+        // T8 stub — just verify it doesn't crash.
         f << "SetStat(1, \"76561198000000000\")\n";
         f << "DownloadApp(1)\n";
         f << "AddNonOwnedDepot(1)\n";
@@ -670,6 +770,101 @@ int main() {
         if (!mfst.count(11111) || mfst.at(11111).gid != 3333333333333333ULL) {
             fprintf(stderr, "[smoke] FAIL: manifestOverrides[11111].gid wrong\n");
             SmokeLoader::g_had_error = true;
+        }
+    }
+
+    // ── T7: ticket table assertions ──────────────────────────────────────
+    printf("[smoke] --- T7 ticket checks ---\n");
+    if (!SmokeLoader::g_had_error) {
+        // appTickets[55555]: 28 bytes, steamId = low 32 bits of LE uint64 at offset 8.
+        // Bytes [8..15] = 0x10,0x00,0x00,0x01,0x10,0x00,0x00,0x01
+        // uint64 LE = 0x0100001001000010 => low32 = 0x01000010 = 16777232
+        auto& at = SmokeLoader::g_appTickets;
+        if (at.find(55555) == at.end()) {
+            fprintf(stderr, "[smoke] FAIL T7: appTickets[55555] missing\n");
+            SmokeLoader::g_had_error = true;
+        } else {
+            const auto& tkt = at.at(55555);
+            if (tkt.bytes.size() != 28) {
+                fprintf(stderr, "[smoke] FAIL T7: appTickets[55555] size %zu (expected 28)\n", tkt.bytes.size());
+                SmokeLoader::g_had_error = true;
+            } else if (tkt.steamId != 0x01000010u) {
+                fprintf(stderr, "[smoke] FAIL T7: appTickets[55555] steamId=0x%08x (expected 0x01000010)\n", tkt.steamId);
+                SmokeLoader::g_had_error = true;
+            } else {
+                printf("[smoke] T7 PASS: appTickets[55555] bytes=%zu steamId=0x%08x\n",
+                       tkt.bytes.size(), tkt.steamId);
+            }
+        }
+
+        // appTickets[66666]: 4 bytes (< 16), steamId must be 0.
+        if (at.find(66666) == at.end()) {
+            fprintf(stderr, "[smoke] FAIL T7: appTickets[66666] missing\n");
+            SmokeLoader::g_had_error = true;
+        } else {
+            const auto& tkt = at.at(66666);
+            if (tkt.steamId != 0) {
+                fprintf(stderr, "[smoke] FAIL T7: appTickets[66666] steamId=%u (expected 0 for short ticket)\n", tkt.steamId);
+                SmokeLoader::g_had_error = true;
+            } else {
+                printf("[smoke] T7 PASS: appTickets[66666] short ticket steamId=0\n");
+            }
+        }
+
+        // appTickets[77777]: malformed hex — should NOT be in the map (skipped).
+        if (at.find(77777) != at.end()) {
+            fprintf(stderr, "[smoke] FAIL T7: appTickets[77777] should not exist (malformed hex)\n");
+            SmokeLoader::g_had_error = true;
+        } else {
+            printf("[smoke] T7 PASS: appTickets[77777] absent (malformed hex correctly skipped)\n");
+        }
+
+        // encTickets[55555]: "cafebabe0102030405060708" = 24 hex chars = 12 bytes, steamId=0.
+        auto& et = SmokeLoader::g_encTickets;
+        if (et.find(55555) == et.end()) {
+            fprintf(stderr, "[smoke] FAIL T7: encTickets[55555] missing\n");
+            SmokeLoader::g_had_error = true;
+        } else {
+            const auto& tkt = et.at(55555);
+            if (tkt.steamId != 0) {
+                fprintf(stderr, "[smoke] FAIL T7: encTickets[55555] steamId=%u (expected 0)\n", tkt.steamId);
+                SmokeLoader::g_had_error = true;
+            } else if (tkt.bytes.size() != 12) {
+                fprintf(stderr, "[smoke] FAIL T7: encTickets[55555] bytes=%zu (expected 12)\n", tkt.bytes.size());
+                SmokeLoader::g_had_error = true;
+            } else {
+                printf("[smoke] T7 PASS: encTickets[55555] bytes=%zu steamId=0\n", tkt.bytes.size());
+            }
+        }
+
+        // getAppTicket / getEncTicket query API smoke (direct table lookup mirrors real impl).
+        {
+            auto it_a = SmokeLoader::g_appTickets.find(55555);
+            const SmokeLoader::LuaTicket* pA = (it_a != SmokeLoader::g_appTickets.end()) ? &it_a->second : nullptr;
+            if (!pA) {
+                fprintf(stderr, "[smoke] FAIL T7: getAppTicket(55555) returned nullptr\n");
+                SmokeLoader::g_had_error = true;
+            } else {
+                printf("[smoke] T7 PASS: getAppTicket(55555) non-null, steamId=0x%08x\n", pA->steamId);
+            }
+
+            auto it_e = SmokeLoader::g_encTickets.find(55555);
+            const SmokeLoader::LuaTicket* pE = (it_e != SmokeLoader::g_encTickets.end()) ? &it_e->second : nullptr;
+            if (!pE) {
+                fprintf(stderr, "[smoke] FAIL T7: getEncTicket(55555) returned nullptr\n");
+                SmokeLoader::g_had_error = true;
+            } else {
+                printf("[smoke] T7 PASS: getEncTicket(55555) non-null, steamId=%u\n", pE->steamId);
+            }
+
+            // Miss case: unknown appId should not be found.
+            auto it_miss = SmokeLoader::g_appTickets.find(99998);
+            if (it_miss != SmokeLoader::g_appTickets.end()) {
+                fprintf(stderr, "[smoke] FAIL T7: getAppTicket(99998) should be null (miss)\n");
+                SmokeLoader::g_had_error = true;
+            } else {
+                printf("[smoke] T7 PASS: getAppTicket(99998) correctly nullptr (miss)\n");
+            }
         }
     }
 

@@ -352,14 +352,117 @@ namespace LuaLoader {
         return 2;
     }
 
-    // ── Stub binding implementations (T7/T8/T9 — do not implement here) ───
-    static int stub_setappticket(lua_State*)           { return 0; }
-    static int stub_seteticket(lua_State*)             { return 0; }
-    static int stub_setstat(lua_State*)                { return 0; }
-    static int stub_downloadapp(lua_State*)            { return 0; }
-    static int stub_addnonowneddepot(lua_State*)       { return 0; }
+    // ── Hex helper for variable-length tickets (T7) ───────────────────────
+
+    // Parse a hex string of arbitrary even length into a byte vector.
+    // Returns false and leaves out unchanged if the string is malformed
+    // (odd length, non-hex characters, or empty).
+    static bool parseHexBytes(const char* hex, size_t hexLen, std::vector<uint8_t>& out) {
+        if (hexLen == 0 || hexLen % 2 != 0) return false;
+        std::vector<uint8_t> result;
+        result.reserve(hexLen / 2);
+        for (size_t i = 0; i < hexLen; i += 2) {
+            int hi = hexNibble(hex[i]);
+            int lo = hexNibble(hex[i + 1]);
+            if (hi < 0 || lo < 0) return false;
+            result.push_back(static_cast<uint8_t>((hi << 4) | lo));
+        }
+        out = std::move(result);
+        return true;
+    }
+
+    // ── T7: setappticket / seteticket real implementations ────────────────
+
+    // setappticket(appid, "hex_ticket")
+    // Decodes hex ticket bytes, extracts SteamID AccountID from offset 8,
+    // and stores in the in-memory appTickets map.
+    //
+    // App ownership ticket layout (OST AppTicket.cpp::GetSpoofSteamID):
+    //   [uint32 Size][uint32 Version][uint64 SteamID][...]
+    //   SteamID lives at byte offset 8; we take the low 32 bits as AccountID.
+    // Minimum bytes required: 16 (to cover offset 8 + 8 bytes of SteamID).
+    static int impl_setappticket(lua_State* L) {
+        int argc = lua_gettop(L);
+        if (argc < 2)
+            return luaL_error(L, "setappticket: need appid and hex string");
+        if (!lua_isinteger(L, 1))
+            return luaL_error(L, "setappticket: arg1 (appid) must be integer");
+        if (!lua_isstring(L, 2))
+            return luaL_error(L, "setappticket: arg2 (ticket) must be hex string");
+
+        lua_Integer raw = lua_tointeger(L, 1);
+        if (raw < 0 || raw > static_cast<lua_Integer>(UINT32_MAX))
+            return luaL_error(L, "setappticket: appid out of uint32 range");
+        uint32_t appId = static_cast<uint32_t>(raw);
+
+        size_t hexLen = 0;
+        const char* hex = lua_tolstring(L, 2, &hexLen);
+
+        std::vector<uint8_t> bytes;
+        if (!parseHexBytes(hex, hexLen, bytes)) {
+            g_pLog->warn("LuaLoader: setappticket(%u): malformed hex string (odd length or bad chars), skipping\n", appId);
+            return 0;
+        }
+
+        // Extract SteamID AccountID from byte offset 8 (little-endian uint64, take low 32 bits).
+        uint32_t steamId = 0;
+        if (bytes.size() >= 16) {
+            uint64_t sid64 = 0;
+            // Read 8 bytes at offset 8 as little-endian uint64.
+            for (int i = 7; i >= 0; --i)
+                sid64 = (sid64 << 8) | bytes[8 + static_cast<size_t>(i)];
+            steamId = static_cast<uint32_t>(sid64 & 0xFFFFFFFFULL);
+        } else {
+            g_pLog->warn("LuaLoader: setappticket(%u): ticket too short (%zu bytes, need >=16) — steamId set to 0\n",
+                         appId, bytes.size());
+        }
+
+        appTickets[appId] = LuaTicket{ steamId, std::move(bytes) };
+        g_pLog->debug("LuaLoader: setappticket(%u): stored %zu bytes, steamId=0x%08x\n",
+                      appId, appTickets[appId].bytes.size(), steamId);
+        return 0;
+    }
+
+    // seteticket(appid, "hex_ticket")
+    // Decodes hex encrypted ticket bytes and stores in the in-memory encTickets
+    // map. steamId is set to 0 because encrypted tickets do not carry a
+    // plaintext SteamID — the GetSteamId hook will fall back to oneTimeSteamIdSpoof.
+    static int impl_seteticket(lua_State* L) {
+        int argc = lua_gettop(L);
+        if (argc < 2)
+            return luaL_error(L, "seteticket: need appid and hex string");
+        if (!lua_isinteger(L, 1))
+            return luaL_error(L, "seteticket: arg1 (appid) must be integer");
+        if (!lua_isstring(L, 2))
+            return luaL_error(L, "seteticket: arg2 (ticket) must be hex string");
+
+        lua_Integer raw = lua_tointeger(L, 1);
+        if (raw < 0 || raw > static_cast<lua_Integer>(UINT32_MAX))
+            return luaL_error(L, "seteticket: appid out of uint32 range");
+        uint32_t appId = static_cast<uint32_t>(raw);
+
+        size_t hexLen = 0;
+        const char* hex = lua_tolstring(L, 2, &hexLen);
+
+        std::vector<uint8_t> bytes;
+        if (!parseHexBytes(hex, hexLen, bytes)) {
+            g_pLog->warn("LuaLoader: seteticket(%u): malformed hex string (odd length or bad chars), skipping\n", appId);
+            return 0;
+        }
+
+        // Encrypted tickets do not expose a plaintext SteamID; store steamId=0.
+        encTickets[appId] = LuaTicket{ 0, std::move(bytes) };
+        g_pLog->debug("LuaLoader: seteticket(%u): stored %zu encrypted bytes\n",
+                      appId, encTickets[appId].bytes.size());
+        return 0;
+    }
+
+    // ── Stub binding implementations (T8/T9 — do not implement here) ─────
+    static int stub_setstat(lua_State*)                    { return 0; }
+    static int stub_downloadapp(lua_State*)                { return 0; }
+    static int stub_addnonowneddepot(lua_State*)           { return 0; }
     static int stub_setnotifyondownloadcomplete(lua_State*) { return 0; }
-    static int stub_setstpropertyforaccount(lua_State*)     { return 0; }
+    static int stub_setstpropertyforaccount(lua_State*)    { return 0; }
 
     // ── Merge lua tables into g_config ────────────────────────────────────
     // Called at the end of init() after all Lua files have been executed.
@@ -493,8 +596,8 @@ namespace LuaLoader {
         register_func(g_lua, "fetch_manifest_code_ex",      impl_fetch_manifest_code_ex);
         register_func(g_lua, "http_get",                    impl_http_get);
         register_func(g_lua, "http_post",                   impl_http_post);
-        register_func(g_lua, "setappticket",                stub_setappticket);
-        register_func(g_lua, "seteticket",                  stub_seteticket);
+        register_func(g_lua, "setappticket",                impl_setappticket);
+        register_func(g_lua, "seteticket",                  impl_seteticket);
         register_func(g_lua, "setstat",                     stub_setstat);
         register_func(g_lua, "downloadapp",                 stub_downloadapp);
         register_func(g_lua, "addnonowneddepot",            stub_addnonowneddepot);
@@ -541,6 +644,18 @@ namespace LuaLoader {
     const ManifestOverride* getManifest(uint32_t depotId) {
         auto it = manifestOverrides.find(depotId);
         if (it == manifestOverrides.end()) return nullptr;
+        return &it->second;
+    }
+
+    const LuaTicket* getAppTicket(uint32_t appId) {
+        auto it = appTickets.find(appId);
+        if (it == appTickets.end()) return nullptr;
+        return &it->second;
+    }
+
+    const LuaTicket* getEncTicket(uint32_t appId) {
+        auto it = encTickets.find(appId);
+        if (it == encTickets.end()) return nullptr;
         return &it->second;
     }
 

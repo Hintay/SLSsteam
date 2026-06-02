@@ -54,6 +54,14 @@ namespace LuaLoader {
     // Falls back to 76561198028121353 when not set.
     uint64_t getStatSteamId(uint32_t appId);
 
+    // Returns a pointer to the in-memory app ownership ticket for appId
+    // registered via setappticket(), or nullptr if not present.
+    const LuaTicket* getAppTicket(uint32_t appId);
+
+    // Returns a pointer to the in-memory encrypted ticket for appId
+    // registered via seteticket(), or nullptr if not present.
+    const LuaTicket* getEncTicket(uint32_t appId);
+
     // Fetch the manifest request code for (appId, depotId, gid).
     // Selection order (mirrors OST FetchManifestRequestCode):
     //   1. g_fetchCodeExRef != LUA_NOREF  → call fetch_manifest_code_ex(appId, depotId, gid)
