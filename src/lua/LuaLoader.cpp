@@ -216,19 +216,22 @@ namespace LuaLoader {
 
         uint64_t size = 0;
         if (argc >= 3) {
-            if (lua_isstring(L, 3)) {
+            // Check most-specific types first: in Lua 5.4, lua_isstring returns
+            // true for numbers, so the integer/number branches must come before
+            // the string branch to avoid them becoming dead code.
+            if (lua_isinteger(L, 3)) {
+                lua_Integer rawSize = lua_tointeger(L, 3);
+                size = (rawSize >= 0) ? static_cast<uint64_t>(rawSize) : 0;
+            } else if (lua_isnumber(L, 3)) {
+                double rawSize = lua_tonumber(L, 3);
+                size = (rawSize >= 0) ? static_cast<uint64_t>(rawSize) : 0;
+            } else if (lua_isstring(L, 3)) {
                 // Tolerate size passed as a numeric string.
                 const char* sizeStr = lua_tostring(L, 3);
                 if (!parseU64Decimal(sizeStr, size)) {
                     g_pLog->warn("LuaLoader: setmanifestid(%u): invalid size string, using 0\n", depotId);
                     size = 0;
                 }
-            } else if (lua_isinteger(L, 3)) {
-                lua_Integer rawSize = lua_tointeger(L, 3);
-                size = (rawSize >= 0) ? static_cast<uint64_t>(rawSize) : 0;
-            } else if (lua_isnumber(L, 3)) {
-                double rawSize = lua_tonumber(L, 3);
-                size = (rawSize >= 0) ? static_cast<uint64_t>(rawSize) : 0;
             }
         }
 
@@ -294,13 +297,13 @@ namespace LuaLoader {
     }
 
     // http_post(url, body [, headers_table]) → (response: string|nil, status: integer)
+    // Contract mirrors http_get: on failure returns (nil, int_status).
     // TODO (T6): full POST support and custom headers require extending Curl::getString.
-    // For now returns nil + a descriptive message so scripts can detect the limitation.
     static int impl_http_post(lua_State* L) {
         // TODO (T6): implement POST with body and optional headers table once
         // Curl is extended with curl_easy_setopt(CURLOPT_POST/CURLOPT_POSTFIELDS).
         lua_pushnil(L);
-        lua_pushstring(L, "http_post: not yet implemented (T6)");
+        lua_pushinteger(L, -1); // -1 signals "not implemented"; matches (nil, int) shape of http_get
         return 2;
     }
 
@@ -320,6 +323,10 @@ namespace LuaLoader {
     // appTokens    → g_config.appTokens    (yaml wins on conflict; lua fills gaps)
     //
     // depotKeys and manifestOverrides are lua-only (no yaml counterpart).
+    //
+    // THREADING NOTE: this function does read-modify-write on MTVariable fields
+    // (get → mutate → set) which is only safe because init() runs single-threaded
+    // at startup before Steam worker threads touch config; do NOT call from a hot path.
     static void mergeIntoConfig() {
         // Merge ownedAppIds (plain union — add every lua-registered id).
         {

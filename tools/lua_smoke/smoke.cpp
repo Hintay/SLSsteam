@@ -149,9 +149,14 @@ static int impl_setmanifestid(lua_State* L) {
     }
     uint64_t size = 0;
     if (argc >= 3) {
+        // Most-specific first: lua_isstring is true for numbers in Lua 5.4,
+        // so integer/number branches must precede the string branch.
         if (lua_isinteger(L, 3)) {
             lua_Integer rs = lua_tointeger(L, 3);
             size = rs >= 0 ? static_cast<uint64_t>(rs) : 0;
+        } else if (lua_isnumber(L, 3)) {
+            double d = lua_tonumber(L, 3);
+            size = d >= 0 ? static_cast<uint64_t>(d) : 0;
         } else if (lua_isstring(L, 3)) {
             parseU64Decimal(lua_tostring(L, 3), size);
         }
@@ -189,10 +194,10 @@ static int impl_http_get(lua_State* L) {
     return 2;
 }
 
-// http_post: returns nil + message (T6 stub).
+// http_post: returns (nil, -1) — matches (nil, int) contract of http_get. TODO (T6).
 static int impl_http_post(lua_State* L) {
     lua_pushnil(L);
-    lua_pushstring(L, "http_post: not yet implemented (T6)");
+    lua_pushinteger(L, -1); // -1 signals "not implemented"; matches (nil, int) shape of http_get
     return 2;
 }
 
@@ -333,9 +338,10 @@ int main() {
         f << "local body, st = HTTP_GET(\"http://example.com\")\n";
         f << "assert(st == 0, \"http_get status should be 0 in smoke\")\n";
 
-        // http_post: returns nil + message
-        f << "local r, msg = Http_Post(\"http://x\", \"body\")\n";
+        // http_post: returns (nil, int) — same shape as http_get failure
+        f << "local r, st2 = Http_Post(\"http://x\", \"body\")\n";
         f << "assert(r == nil, \"http_post should return nil in smoke\")\n";
+        f << "assert(type(st2) == \"number\", \"http_post status should be integer (got \" .. type(st2) .. \")\")\n";
 
         // Remaining stubs — just verify they don't crash.
         f << "SetAppTicket(1, \"deadbeef\")\n";
