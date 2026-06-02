@@ -484,8 +484,8 @@ namespace LuaLoader {
         lua_setmetatable(g_lua, -2);
         lua_pop(g_lua, 1); // Pop _G.
 
-        // Register all bindings. T2 functions are real; others remain stubs
-        // until their respective tasks (T6 for http_post, T7/T8 for tickets/stat).
+        // Register all bindings. T2 and T6 functions are real (http_post implemented);
+        // T7/T8 (tickets/stat) bindings remain stubs.
         register_func(g_lua, "addappid",                    impl_addappid);
         register_func(g_lua, "addtoken",                    impl_addtoken);
         register_func(g_lua, "setmanifestid",               impl_setmanifestid);
@@ -566,8 +566,9 @@ namespace LuaLoader {
 
         if (lua_isinteger(L, -1)) {
             lua_Integer v = lua_tointeger(L, -1);
-            if (v <= 0) return false;
-            out = static_cast<uint64_t>(v);
+            uint64_t uv = static_cast<uint64_t>(v);
+            if (uv == 0) return false;
+            out = uv;
             return true;
         }
         if (lua_isnumber(L, -1)) {

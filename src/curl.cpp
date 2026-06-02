@@ -53,6 +53,9 @@ int Curl::request(const char* method,
 	if (slist)
 		curl_easy_setopt(handle, CURLOPT_HTTPHEADER, slist);
 
+	curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 10L); // connect timeout (s)
+	curl_easy_setopt(handle, CURLOPT_TIMEOUT, 30L);        // total transfer timeout (s)
+
 	CURLcode res = curl_easy_perform(handle);
 
 	if (res == CURLE_OK)

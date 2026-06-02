@@ -148,8 +148,9 @@ static bool readU64FromTop(lua_State* L, uint64_t& out) {
     if (lua_isnil(L, -1)) return false;
     if (lua_isinteger(L, -1)) {
         lua_Integer v = lua_tointeger(L, -1);
-        if (v <= 0) return false;
-        out = static_cast<uint64_t>(v);
+        uint64_t uv = static_cast<uint64_t>(v);
+        if (uv == 0) return false;
+        out = uv;
         return true;
     }
     if (lua_isnumber(L, -1)) {
