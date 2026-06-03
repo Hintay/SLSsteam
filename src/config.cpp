@@ -133,7 +133,7 @@ bool CConfig::loadSettings()
 	useWhiteList = getSetting<bool>(node, "UseWhitelist", false);
 	automaticFilter = getSetting<bool>(node, "AutoFilterList", true);
 	playNotOwnedGames = getSetting<bool>(node, "PlayNotOwnedGames", false);
-	packageInjection = getSetting<bool>(node, "PackageInjection", false);
+	packageInjection = getSetting<bool>(node, "PackageInjection", true);
 	safeMode = getSetting<bool>(node, "SafeMode", false);
 	notifications = getSetting<bool>(node, "Notifications", true);
 	warnHashMissmatch = getSetting<bool>(node, "WarnHashMissmatch", false);
