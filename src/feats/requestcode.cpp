@@ -1,6 +1,7 @@
 #include "requestcode.hpp"
 
-#include "../sdk/CProtoBufMsgBase.hpp"
+#include "../sdk/CNetPacket.hpp"
+#include "../sdk/CProtoBufMsgBase.hpp"   // EMsgType enum + CMsgProtoBufHeader
 #include "../sdk/EResult.hpp"
 #include "../sdk/protobufs/slssteam_servicemethods.pb.h"
 
@@ -9,119 +10,94 @@
 #include "../globals.hpp"
 #include "../log.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <exception>
 #include <future>
 #include <mutex>
 #include <unordered_map>
 
-// Manifest request-code interception (mirrors OST Hooks_NetPacket_Manifest).
+// Manifest request-code interception at the raw packet layer (OST-style; see
+// docs/superpowers/notes/pattern-rederivation-runbook.md §2.B.1).
 //
-// Steam asks the CM for a per-manifest "request code" before it can download
-// a depot manifest. For depots we unlocked the server returns a failure, so
-// we fetch the code ourselves (Lua provider / built-in HTTP) and splice it in.
-//
-// Flow:
-//   - OUTGOING (sendMsg): on ServiceMethodCallFromClient (151) whose header
-//     target_job_name == "ContentServerDirectory.GetManifestRequestCode#1",
-//     parse {app_id, depot_id, manifest_id} and launch an async fetch. The
-//     future is stored keyed by the header's jobid_source. The request is left
-//     untouched so it still reaches the server.
-//   - INCOMING (recvMsg): on ServiceMethodResponse (147), look up the pending
-//     entry by the header's jobid_target. If found, wait (bounded) for the
-//     fetch; on success set the body's manifest_request_code and force the
-//     header eresult to OK (the ServiceMethod result lives in the header).
+// SLSsteam previously dispatched this from CProtoBufMsgBase::Send / InitFromPacket,
+// but the live build proved the GetManifestRequestCode ServiceMethod never
+// traverses that path: the outgoing EMsg 151 is sent by a ServiceMethod sender
+// straight to the WebSocket/CM transport, so CProtoBufMsgBase::Send sees only
+// classic CMsg sends. The request reached the server unintercepted -> 'Access
+// Denied' -> download cancelled. The interception now lives on the raw hooks,
+// matching OST's BBuildAndAsyncSendFrame / RecvPkt.
+
+namespace
+{
+	constexpr char TARGET_JOB_NAME[] = "ContentServerDirectory.GetManifestRequestCode#1";
+	constexpr auto MAX_WAIT = std::chrono::seconds(12);
+
+	constexpr uint32_t kMaxHdr   = 1024;
+	constexpr uint32_t kMaxBody  = 8092;
+	constexpr int      kPoolSize = 8;
+
+	// jobid_source (outgoing) -> pending fetch future. Touched from the send hook
+	// and the recv hook only; guard every access with g_mutex.
+	std::unordered_map<uint64_t, std::shared_future<uint64_t>> g_pending;
+	std::mutex g_mutex;
+	// Lock-free fast-path gate for the recv hook (runs on every incoming packet):
+	// mirrors g_pending.size(); only written under g_mutex.
+	std::atomic<size_t> g_pendingCount{0};
+
+	// Ring-buffer pool for rewritten incoming packets — the rewritten bytes must
+	// outlive the oRecvPkt call that consumes them. RecvPkt is single-threaded per
+	// CM connection (same assumption OST relies on).
+	uint8_t g_recvPool[kPoolSize][sizeof(MsgHdr) + kMaxHdr + kMaxBody];
+	int     g_recvPoolIdx = 0;
+}
+
 namespace RequestCode
 {
-	namespace
+	void onSendFrame(const uint8_t* pubData, uint32_t cubData)
 	{
-		// ServiceMethod target name we intercept.
-		constexpr char TARGET_JOB_NAME[] = "ContentServerDirectory.GetManifestRequestCode#1";
+		uint16_t eMsg = 0;
+		const uint8_t *pHdr = nullptr, *pBody = nullptr;
+		uint32_t cbHdr = 0, cbBody = 0;
+		if (!netpacket::unpackRaw(pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) return;
+		if (eMsg != EMSG_SERVICE_METHOD_CALL_FROM_CLIENT) return;
 
-		// Upper bound on how long the recv handler blocks the incoming-message
-		// dispatch thread waiting for the fetch. Matches OST's 12s. The curl
-		// total timeout (10s) sits just under this so a slow-but-valid fetch
-		// still lands, while keeping the dispatch-thread stall short enough not
-		// to risk the CM heartbeat / connection (the old 35s could).
-		constexpr auto MAX_WAIT = std::chrono::seconds(12);
+		CMsgProtoBufHeader hdr;
+		if (!hdr.ParseFromArray(pHdr, static_cast<int>(cbHdr))) return;
+		if (!hdr.has_target_job_name() || hdr.target_job_name() != TARGET_JOB_NAME) return;
+		if (!hdr.has_jobid_source()) return;
 
-		// jobid_source (from the outgoing call) -> pending fetch future.
-		// Touched from the send hook and the recv hook only (the async lambda
-		// returns a value and never touches this map); guard every access with g_mutex.
-		std::unordered_map<uint64_t, std::shared_future<uint64_t>> g_pending;
-		std::mutex g_mutex;
-	}
+		CContentServerDirectory_GetManifestRequestCode_Request req;
+		if (!req.ParseFromArray(pBody, static_cast<int>(cbBody))) return;
+		if (!req.has_depot_id() || !req.has_manifest_id()) return;
 
-	void sendMsg(CProtoBufMsgBase* msg)
-	{
-		if (msg->type != EMSG_SERVICE_METHOD_CALL_FROM_CLIENT || !msg->header)
-		{
-			return;
-		}
+		const uint64_t jobId   = hdr.jobid_source();
+		const uint32_t depotId = req.depot_id();
+		const uint64_t gid     = req.manifest_id();
+		const uint32_t appId   = req.has_app_id() ? req.app_id() : 0;
 
-		if (!msg->header->has_target_job_name() || msg->header->target_job_name() != TARGET_JOB_NAME)
-		{
-			return;
-		}
+		g_pLog->debug("RequestCode: fetching code for app=%u depot=%u gid=%llu (jobid=%llu)\n",
+		              appId, depotId, static_cast<unsigned long long>(gid),
+		              static_cast<unsigned long long>(jobId));
 
-		const auto body = msg->getBody<CContentServerDirectory_GetManifestRequestCode_Request>();
-		if (!body->has_app_id() || !body->has_depot_id() || !body->has_manifest_id())
-		{
-			return;
-		}
-
-		// jobid_source is always set on a real ServiceMethodCallFromClient, but
-		// guard against a malformed packet whose unset field would default to
-		// k_GIDNil and later spuriously match an unset jobid_target on recv.
-		if (!msg->header->has_jobid_source())
-		{
-			return;
-		}
-
-		const uint64_t jobId = msg->header->jobid_source();
-		const uint32_t appId = body->app_id();
-		const uint32_t depotId = body->depot_id();
-		const uint64_t gid = body->manifest_id();
-
-		g_pLog->debug
-		(
-			"RequestCode: fetching code for app=%u depot=%u gid=%llu (jobid=%llu)\n",
-			appId, depotId, static_cast<unsigned long long>(gid), static_cast<unsigned long long>(jobId)
-		);
-
-		// Launch the fetch off-thread so the original request is not blocked.
-		// The lambda swallows every exception (returning 0 on failure) so nothing
-		// can propagate out of future.get() into the Steam message hook, and the
-		// std::async call itself is guarded against thread-creation failure — an
-		// exception escaping either site would unwind through a C trampoline and
-		// std::terminate the client.
+		// Launch the fetch off-thread. The lambda swallows every exception
+		// (returning 0) so nothing unwinds through the C trampoline; the std::async
+		// call itself is guarded against thread-creation failure for the same reason.
 		std::shared_future<uint64_t> future;
 		try
 		{
-			future = std::async
-			(
-				std::launch::async,
+			future = std::async(std::launch::async,
 				[appId, depotId, gid]() -> uint64_t
 				{
 					try
 					{
 						uint64_t code = 0;
-						if (LuaLoader::fetchManifestCode(appId, depotId, gid, code))
-						{
-							return code;
-						}
+						if (LuaLoader::fetchManifestCode(appId, depotId, gid, code)) return code;
 					}
-					catch (const std::exception& e)
-					{
-						g_pLog->warn("RequestCode: fetch threw: %s\n", e.what());
-					}
-					catch (...)
-					{
-						g_pLog->warn("RequestCode: fetch threw an unknown exception\n");
-					}
+					catch (const std::exception& e) { g_pLog->warn("RequestCode: fetch threw: %s\n", e.what()); }
+					catch (...) { g_pLog->warn("RequestCode: fetch threw an unknown exception\n"); }
 					return 0;
-				}
-			).share();
+				}).share();
 		}
 		catch (const std::exception& e)
 		{
@@ -132,40 +108,44 @@ namespace RequestCode
 
 		std::lock_guard<std::mutex> lock(g_mutex);
 		g_pending[jobId] = std::move(future);
+		g_pendingCount.store(g_pending.size(), std::memory_order_release);
 	}
 
-	void recvMsg(CProtoBufMsgBase* msg)
+	void onRecvPacket(CNetPacket* pkt)
 	{
-		if (msg->type != EMSG_SERVICE_METHOD_RESPONSE || !msg->header)
-		{
-			return;
-		}
+		if (!pkt) return;
+		if (g_pendingCount.load(std::memory_order_acquire) == 0) return; // fast path
 
-		const uint64_t jobId = msg->header->jobid_target();
+		uint16_t eMsg = 0;
+		const uint8_t *pHdr = nullptr, *pBody = nullptr;
+		uint32_t cbHdr = 0, cbBody = 0;
+		if (!netpacket::unpackRaw(pkt->m_pubData, pkt->m_cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) return;
+		if (eMsg != EMSG_SERVICE_METHOD_RESPONSE) return;
+
+		CMsgProtoBufHeader hdr;
+		if (!hdr.ParseFromArray(pHdr, static_cast<int>(cbHdr)) || !hdr.has_jobid_target()) return;
+
+		const uint64_t jobId = hdr.jobid_target();
 
 		std::shared_future<uint64_t> future;
 		{
 			std::lock_guard<std::mutex> lock(g_mutex);
 			const auto it = g_pending.find(jobId);
-			if (it == g_pending.end())
-			{
-				return;
-			}
+			if (it == g_pending.end()) return;   // not one of ours
 			future = it->second;
-			g_pending.erase(it); //Always clean up, even on timeout/failure
+			g_pending.erase(it);                  // always clean up
+			g_pendingCount.store(g_pending.size(), std::memory_order_release);
 		}
 
 		if (future.wait_for(MAX_WAIT) != std::future_status::ready)
 		{
-			g_pLog->warn("RequestCode: fetch timed out for jobid=%llu\n", static_cast<unsigned long long>(jobId));
+			g_pLog->warn("RequestCode: fetch timed out for jobid=%llu\n",
+			             static_cast<unsigned long long>(jobId));
 			return;
 		}
 
 		uint64_t code = 0;
-		try
-		{
-			code = future.get();
-		}
+		try { code = future.get(); }
 		catch (const std::exception& e)
 		{
 			g_pLog->warn("RequestCode: fetch exception for jobid=%llu: %s\n",
@@ -174,21 +154,36 @@ namespace RequestCode
 		}
 		if (!code)
 		{
-			//Fetch failed: leave the response untouched so the install fails gracefully.
-			g_pLog->warn("RequestCode: no code for jobid=%llu, passing response through\n", static_cast<unsigned long long>(jobId));
+			g_pLog->warn("RequestCode: no code for jobid=%llu, passing response through\n",
+			             static_cast<unsigned long long>(jobId));
 			return;
 		}
 
-		//The ServiceMethod result lives in the header, not the body.
-		msg->header->set_eresult(ERESULT_OK);
+		// Header: force eresult OK (the ServiceMethod result lives in the header).
+		hdr.set_eresult(ERESULT_OK);
+		const size_t newHdrLen = hdr.ByteSizeLong();
 
-		const auto body = msg->getBody<CContentServerDirectory_GetManifestRequestCode_Response>();
-		body->set_manifest_request_code(code);
+		// Body: set manifest_request_code.
+		CContentServerDirectory_GetManifestRequestCode_Response resp;
+		resp.set_manifest_request_code(code);
+		const size_t newBodyLen = resp.ByteSizeLong();
 
-		g_pLog->info
-		(
-			"RequestCode: injected code=%llu for jobid=%llu\n",
-			static_cast<unsigned long long>(code), static_cast<unsigned long long>(jobId)
-		);
+		if (newHdrLen > kMaxHdr || newBodyLen > kMaxBody) return;
+
+		// Rebuild [MsgHdr][newHdr][newBody] into a pooled buffer; keep the original
+		// eMsg (proto flag intact), update headerLength to the new header size.
+		uint8_t* buf = g_recvPool[g_recvPoolIdx];
+		MsgHdr* outHdr = reinterpret_cast<MsgHdr*>(buf);
+		outHdr->eMsg         = reinterpret_cast<const MsgHdr*>(pkt->m_pubData)->eMsg;
+		outHdr->headerLength = static_cast<uint32_t>(newHdrLen);
+		if (!hdr.SerializeToArray(buf + sizeof(MsgHdr), static_cast<int>(newHdrLen))) return;
+		if (!resp.SerializeToArray(buf + sizeof(MsgHdr) + newHdrLen, static_cast<int>(newBodyLen))) return;
+
+		pkt->m_pubData = buf;
+		pkt->m_cubData = static_cast<uint32_t>(sizeof(MsgHdr) + newHdrLen + newBodyLen);
+		g_recvPoolIdx = (g_recvPoolIdx + 1) % kPoolSize;
+
+		g_pLog->info("RequestCode: injected code=%llu for jobid=%llu\n",
+		             static_cast<unsigned long long>(code), static_cast<unsigned long long>(jobId));
 	}
 }
