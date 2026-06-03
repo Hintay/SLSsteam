@@ -356,9 +356,12 @@ static uint32_t hkUser_CheckAppOwnership(void* pClientUser, uint32_t appId, CApp
 {
 	// Capture CUser* once; setCUser is idempotent/atomic so calling every invocation is safe.
 	Package::setCUser(pClientUser);
-	Package::pumpOnSteamThread();   // initial inject + drain lua hot-reload changes, on this Steam thread (§8)
 
 	const uint32_t ret = Hooks::CUser_CheckAppOwnership.tramp.fn(pClientUser, appId, pOwnershipInfo);
+
+	// Pump only after the original ownership query has returned. Running Mark/Process before
+	// the original can re-enter Steam's license path while it is still evaluating this query.
+	Package::pumpOnSteamThread();   // initial inject + drain lua hot-reload changes, on this Steam thread (§8)
 
 	//Do not log pOwnershipInfo because it gets deleted very quickly, so it's pretty much useless in the logs
 	g_pLog->once
@@ -382,6 +385,11 @@ static uint32_t hkUser_CheckAppOwnership(void* pClientUser, uint32_t appId, CApp
 static uint32_t hkUser_GetSubscribedApps(void* pClientUser, uint32_t* pAppList, uint32_t size, uint8_t a3)
 {
 	uint32_t count = Hooks::CUser_GetSubscribedApps.tramp.fn(pClientUser, pAppList, size, a3);
+
+	// This path is a more reliable Steam-thread touchpoint than CheckAppOwnership on some
+	// SteamUI flows. Keep it post-original for the same re-entrancy reason as above.
+	Package::setCUser(pClientUser);
+	Package::pumpOnSteamThread();
 
 	Apps::getSubscribedApps(pAppList, size, count);
 
@@ -409,6 +417,13 @@ static void* hkCPackageInfo_GetPackageInfo(void* pThis, uint32_t pkgId, uint64_t
 	if (pkgId == 0 && ret && PackageInfo::status(ret) == 0)
 	{
 		Package::setInjectedPackage(ret);
+		// pkg0 capture and the GetSubscribedApps pump touchpoint don't overlap in time:
+		// GetSubscribedApps fires in a burst at boot (capturing CUser) then goes quiet,
+		// while GetPackageInfo(0) keeps firing afterwards. Pump here too — this is the
+		// touchpoint that provides pkg0, and CUser is already captured by now — so the
+		// one-shot injection actually completes. Runs on a Steam thread; ThreadPumpGuard
+		// makes the re-entrancy from ProcessPendingLicenseUpdates safe.
+		Package::pumpOnSteamThread();
 	}
 	return ret;
 }
