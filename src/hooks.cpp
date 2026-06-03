@@ -24,8 +24,11 @@
 #include "feats/manifest.hpp"
 #include "feats/misc.hpp"
 #include "feats/fakeappid.hpp"
+#include "feats/package.hpp"
 #include "feats/requestcode.hpp"
 #include "feats/ticket.hpp"
+
+#include "sdk/PackageInfo.hpp"
 
 #include "libmem/libmem.h"
 
@@ -347,6 +350,9 @@ static uint32_t hkSteamMatchmakingServers_RequestInternetServerList(void* pSteam
 __attribute__((hot))
 static uint32_t hkUser_CheckAppOwnership(void* pClientUser, uint32_t appId, CAppOwnershipInfo* pOwnershipInfo)
 {
+	// Capture CUser* once; setCUser is idempotent/atomic so calling every invocation is safe.
+	Package::setCUser(pClientUser);
+
 	const uint32_t ret = Hooks::CUser_CheckAppOwnership.tramp.fn(pClientUser, appId, pOwnershipInfo);
 
 	//Do not log pOwnershipInfo because it gets deleted very quickly, so it's pretty much useless in the logs
@@ -387,6 +393,19 @@ static uint32_t hkUser_GetSubscribedApps(void* pClientUser, uint32_t* pAppList, 
 	);
 
 	return count;
+}
+
+__attribute__((hot))
+static void* hkCPackageInfo_GetPackageInfo(void* pThis, uint32_t pkgId, uint64_t token)
+{
+	void* ret = Hooks::CPackageInfo_GetPackageInfo.tramp.fn(pThis, pkgId, token);
+	// pkg0 is a stable singleton (proven via frida). Capture once, only when
+	// Available (Status==0), so we never latch a transient/invalid object.
+	if (pkgId == 0 && ret && PackageInfo::status(ret) == 0)
+	{
+		Package::setInjectedPackage(ret);
+	}
+	return ret;
 }
 
 static bool hkClientAppManager_BCanRemotePlayTogether(void* pClientAppManager, uint32_t appId)
@@ -1022,6 +1041,11 @@ namespace Hooks
 	DetourHook<CUser_CheckAppOwnership_t> CUser_CheckAppOwnership;
 	DetourHook<CUser_GetSubscribedApps_t> CUser_GetSubscribedApps;
 
+	MarkLicenseAsChanged_t         oMarkLicenseAsChanged         = nullptr;
+	ProcessPendingLicenseUpdates_t oProcessPendingLicenseUpdates = nullptr;
+	GetPackageInfo_t               oGetPackageInfo               = nullptr;
+	DetourHook<CPackageInfo_GetPackageInfo_t> CPackageInfo_GetPackageInfo;
+
 	DetourHook<IClientAppManager_BCanRemotePlayTogether_t> IClientAppManager_BCanRemotePlayTogether;
 
 	DetourHook<IClientUser_BLoggedOn_t> IClientUser_BLoggedOn;
@@ -1058,6 +1082,10 @@ bool Hooks::setup()
 
 	IClientUser_GetSteamId = Patterns::IClientUser::GetSteamId.address;
 
+	oMarkLicenseAsChanged         = reinterpret_cast<MarkLicenseAsChanged_t>(Patterns::CUser::MarkLicenseAsChanged.address);
+	oProcessPendingLicenseUpdates = reinterpret_cast<ProcessPendingLicenseUpdates_t>(Patterns::CUser::ProcessPendingLicenseUpdates.address);
+	oGetPackageInfo               = reinterpret_cast<GetPackageInfo_t>(Patterns::CPackageInfo::GetPackageInfo.address);
+
 	bool succeeded =
 		TraceIPC.setup(Patterns::TraceIPC, &hkTraceIPC)
 
@@ -1074,6 +1102,8 @@ bool Hooks::setup()
 
 		&& CUser_CheckAppOwnership.setup(Patterns::CUser::CheckAppOwnership, &hkUser_CheckAppOwnership)
 		&& CUser_GetSubscribedApps.setup(Patterns::CUser::GetSubscribedApps, &hkUser_GetSubscribedApps)
+
+		&& CPackageInfo_GetPackageInfo.setup(Patterns::CPackageInfo::GetPackageInfo, &hkCPackageInfo_GetPackageInfo)
 
 		&& CSteamEngine_Init.setup(Patterns::CSteamEngine::Init, &hkSteamEngine_Init)
 		&& CSteamEngine_SetAppIdForCurrentPipe.setup(Patterns::CSteamEngine::SetAppIdForCurrentPipe, &hkSteamEngine_SetAppIdForCurrentPipe)
@@ -1128,6 +1158,7 @@ void Hooks::place()
 
 	CUser_CheckAppOwnership.place();
 	CUser_GetSubscribedApps.place();
+	CPackageInfo_GetPackageInfo.place();
 
 	IClientAppManager_BCanRemotePlayTogether.place();
 
@@ -1171,6 +1202,7 @@ void Hooks::remove()
 
 	CUser_CheckAppOwnership.remove();
 	CUser_GetSubscribedApps.remove();
+	CPackageInfo_GetPackageInfo.remove();
 
 	IClientAppManager_BCanRemotePlayTogether.remove();
 
