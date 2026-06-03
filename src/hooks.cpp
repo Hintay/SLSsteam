@@ -278,20 +278,38 @@ static uint32_t hkProtoBufMsgBase_Send(CProtoBufMsgBase* pMsg)
 __attribute__((hot))
 static bool hkCWebSocketConnection_BBuildAndAsyncSendFrame(void* pThis, int opcode, uint8_t* pubData, uint32_t cubData)
 {
-	// opcode 0x2 == WebSocket binary frame (the raw Steam packet payload). NOTE:
-	// 0x2 is the RFC6455 binary opcode (the runbook's "0x8" was the CLOSE opcode of
-	// an unrelated call-site; live data frames arrive with opcode 2, verified).
-	if (opcode == 0x2)
-		RequestCode::onSendFrame(pubData, cubData);
+	// opcode 0x2 == WebSocket binary frame (the raw Steam packet payload; 0x2 is the
+	// RFC6455 binary opcode — the runbook's "0x8" was an unrelated CLOSE call-site).
+	// onSendFrame returns true for the GetManifestRequestCode ServiceMethod call:
+	// DROP the frame (never sent to the CM) and report success; its response is
+	// fabricated client-side and injected on the recv path.
+	if (opcode == 0x2 && RequestCode::onSendFrame(pubData, cubData))
+		return true;
 	return Hooks::CWebSocketConnection_BBuildAndAsyncSendFrame.tramp.fn(pThis, opcode, pubData, cubData);
 }
 
 __attribute__((hot))
 static void* hkCCMConnection_RecvPkt(void* pThis, CNetPacket* pPacket)
 {
-	// Splice the manifest request code into the matching ServiceMethod response
-	// BEFORE the original processes it (rewrites pPacket->m_pubData/m_cubData).
-	RequestCode::onRecvPacket(pPacket);
+	// If a dropped GetManifestRequestCode's code fetch has completed, deliver the
+	// fabricated ServiceMethodResponse by borrowing this incoming packet as a carrier
+	// for one extra oRecvPkt call (OST's g_InjectPkt technique), then restore and
+	// deliver the real packet below.
+	if (pPacket)
+	{
+		const uint8_t* injData = nullptr;
+		uint32_t injSize = 0;
+		if (RequestCode::nextInjection(injData, injSize))
+		{
+			uint8_t* origData = pPacket->m_pubData;
+			uint32_t origSize = pPacket->m_cubData;
+			pPacket->m_pubData = const_cast<uint8_t*>(injData);
+			pPacket->m_cubData = injSize;
+			Hooks::CCMConnection_RecvPkt.tramp.fn(pThis, pPacket);
+			pPacket->m_pubData = origData;
+			pPacket->m_cubData = origSize;
+		}
+	}
 	return Hooks::CCMConnection_RecvPkt.tramp.fn(pThis, pPacket);
 }
 
