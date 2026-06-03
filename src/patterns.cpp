@@ -374,6 +374,32 @@ namespace Patterns
 		};
 	}
 
+	namespace CWebSocketConnection
+	{
+		Pattern_t BBuildAndAsyncSendFrame
+		{
+			"CWebSocketConnection::BBuildAndAsyncSendFrame",
+			// Entry: push ebp; mov ebp,esp; push edi; PIC thunk; add edi,GOT; push esi;
+			// push ebx; sub esp,0xac; mov eax,[ebp+0x10] (3rd arg = pubData). PIC call +
+			// GOT displacement wildcarded. Outgoing raw-packet send (OST's manifest hook).
+			"55 89 E5 57 E8 ? ? ? ? 81 C7 ? ? ? ? 56 53 81 EC AC 00 00 00 8B 45 10",
+			MemHlp::SigFollowMode::None
+		};
+	}
+
+	namespace CCMConnection
+	{
+		Pattern_t RecvPkt
+		{
+			"CCMConnection::RecvPkt",
+			// Entry: push ebp; mov ebp,esp; push edi; PIC thunk; add edi,GOT; push esi;
+			// push ebx; sub esp,0x34; push 1; push [ebp+0xc] (CNetPacket* arg2); mov ebx,edi;
+			// call (downstream classifier). PIC call + GOT displacement wildcarded.
+			"55 89 E5 57 E8 ? ? ? ? 81 C7 ? ? ? ? 56 53 83 EC 34 6A 01 FF 75 0C 89 FB E8 ? ? ? ?",
+			MemHlp::SigFollowMode::None
+		};
+	}
+
 	//steamui.so
 	namespace ISteamMatchmakingPingResponse
 	{

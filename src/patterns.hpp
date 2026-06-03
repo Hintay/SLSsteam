@@ -131,6 +131,16 @@ namespace Patterns
 		extern Pattern_t Grow;   // CUtlMemory<uint32>::Grow(mem*, int) via Relative anchor
 	}
 
+	namespace CWebSocketConnection
+	{
+		extern Pattern_t BBuildAndAsyncSendFrame;   // outgoing raw packet (manifest request-code)
+	}
+
+	namespace CCMConnection
+	{
+		extern Pattern_t RecvPkt;                   // incoming raw packet (CNetPacket*)
+	}
+
 	//steamui.so
 	namespace ISteamMatchmakingPingResponse
 	{
