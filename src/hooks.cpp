@@ -426,6 +426,16 @@ static void hkCUpdateManager_MarkAppChange(void* pSource, uint32_t appId, uint32
 	Hooks::CUpdateManager_MarkAppChange.tramp.fn(pSource, appId, flags);
 }
 
+// Stamp lua PurchasedTime into the app overview for controlled apps (desktop classic UI).
+// arg3 is void** ppHolder (pointer-to-holder); deref once for the CSteamApp.
+// Returns void* so EAX passes through unchanged regardless of the real return type.
+// Note: fires 0 times on Deck gamescope/CEF — expected and harmless.
+static void* hkCSteamUI_FillInAppOverview(void* pController, void* pAppOverview, void** ppHolder)
+{
+	SteamUI::stampPurchaseTimeIfControlled(ppHolder);
+	return Hooks::CSteamUIAppController_FillInAppOverview.tramp.fn(pController, pAppOverview, ppHolder);
+}
+
 static bool hkClientAppManager_BCanRemotePlayTogether(void* pClientAppManager, uint32_t appId)
 {
 	const bool ret = Hooks::IClientAppManager_BCanRemotePlayTogether.tramp.fn(pClientAppManager, appId);
@@ -1069,6 +1079,7 @@ namespace Hooks
 	CUpdateManager_MarkAppChange_t oMarkAppChange = nullptr;
 	DetourHook<CSteamUI_GetAppByID_detour_t>          CSteamUIAppController_GetAppByID;
 	DetourHook<CUpdateManager_MarkAppChange_detour_t> CUpdateManager_MarkAppChange;
+	DetourHook<CSteamUI_FillInAppOverview_t>          CSteamUIAppController_FillInAppOverview;
 
 	DetourHook<IClientAppManager_BCanRemotePlayTogether_t> IClientAppManager_BCanRemotePlayTogether;
 
@@ -1135,6 +1146,7 @@ bool Hooks::setup()
 
 		&& CSteamUIAppController_GetAppByID.setup(Patterns::CSteamUIAppController::GetAppByID, &hkCSteamUI_GetAppByID)
 		&& CUpdateManager_MarkAppChange.setup(Patterns::CUpdateManager::MarkAppChange, &hkCUpdateManager_MarkAppChange)
+		&& CSteamUIAppController_FillInAppOverview.setup(Patterns::CSteamUIAppController::FillInAppOverview, &hkCSteamUI_FillInAppOverview)
 
 		&& CSteamEngine_Init.setup(Patterns::CSteamEngine::Init, &hkSteamEngine_Init)
 		&& CSteamEngine_SetAppIdForCurrentPipe.setup(Patterns::CSteamEngine::SetAppIdForCurrentPipe, &hkSteamEngine_SetAppIdForCurrentPipe)
@@ -1195,6 +1207,7 @@ void Hooks::place()
 
 	CSteamUIAppController_GetAppByID.place();
 	CUpdateManager_MarkAppChange.place();
+	CSteamUIAppController_FillInAppOverview.place();
 
 	IClientAppManager_BCanRemotePlayTogether.place();
 
@@ -1242,6 +1255,7 @@ void Hooks::remove()
 
 	CSteamUIAppController_GetAppByID.remove();
 	CUpdateManager_MarkAppChange.remove();
+	CSteamUIAppController_FillInAppOverview.remove();
 
 	IClientAppManager_BCanRemotePlayTogether.remove();
 

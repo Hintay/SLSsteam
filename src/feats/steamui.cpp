@@ -1,6 +1,8 @@
 #include "steamui.hpp"
 
 #include "../hooks.hpp"
+#include "../config.hpp"
+#include "../lua/LuaLoader.hpp"
 #include "../sdk/CSteamApp.hpp"
 #include "../sdk/CSteamEngine.hpp"
 #include "../sdk/CUser.hpp"
@@ -40,6 +42,17 @@ void removeAppAndSendChange(uint32_t appId)
     CSteamApp::clearOwnership(app);                                // [app+0x18] = 0
     Hooks::oMarkAppChange(src, appId, kEAppChange_AddedOrCreated); // refresh library UI
     g_pLog->debug("SteamUI: removed+marked app %u\n", appId);
+}
+
+void stampPurchaseTimeIfControlled(void** ppHolder)
+{
+    if (!ppHolder) return;
+    void* app = *ppHolder;                       // §7.8: arg3 is void**, deref once
+    if (!app) return;
+    uint32_t appId = CSteamApp::appId(app);      // [app+0x0c]
+    if (!g_config.isAddedAppId(appId)) return;   // only controlled apps
+    uint32_t t = LuaLoader::getPurchaseTime(appId);
+    if (t) CSteamApp::setPurchaseTime(app, t);   // [app+0x28] = t
 }
 
 } // namespace SteamUI

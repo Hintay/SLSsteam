@@ -134,6 +134,9 @@ namespace Hooks
 	extern DetourHook<CSteamUI_GetAppByID_detour_t>          CSteamUIAppController_GetAppByID;
 	extern DetourHook<CUpdateManager_MarkAppChange_detour_t> CUpdateManager_MarkAppChange;
 
+	typedef void* (*CSteamUI_FillInAppOverview_t)(void*, void*, void**);
+	extern DetourHook<CSteamUI_FillInAppOverview_t> CSteamUIAppController_FillInAppOverview;
+
 	extern DetourHook<TraceIPC_t> TraceIPC;
 
 	extern DetourHook<LoadDepotDecryptionKey_t> LoadDepotDecryptionKey;
