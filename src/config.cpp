@@ -1,6 +1,7 @@
 #include "config.hpp"
 
 #include "config_default.hpp"
+#include "feats/package.hpp"
 #include "filewatcher.hpp"
 #include "log.hpp"
 #include "lua/LuaLoader.hpp"
@@ -13,6 +14,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 
@@ -77,6 +79,22 @@ static void onFileChange(const std::string& path, uint32_t mask)
 	g_config.loadSettings();
 }
 
+static void collectAppIdDelta(const std::unordered_set<uint32_t>& previous,
+	const std::unordered_set<uint32_t>& current,
+	std::vector<uint32_t>& additions,
+	std::vector<uint32_t>& removals)
+{
+	for (uint32_t id : current)
+	{
+		if (!previous.contains(id)) additions.push_back(id);
+	}
+
+	for (uint32_t id : previous)
+	{
+		if (!current.contains(id)) removals.push_back(id);
+	}
+}
+
 bool CConfig::init()
 {
 	if(createFile())
@@ -111,6 +129,11 @@ void CConfig::setError(ELoadError err)
 
 bool CConfig::loadSettings()
 {
+	const bool queueLiveAppIdChanges = LuaLoader::initDone();
+	const auto previousAddedAppIds = queueLiveAppIdChanges
+		? addedAppIds.get()
+		: std::unordered_set<uint32_t>();
+
 	YAML::Node node;
 	try
 	{
@@ -355,9 +378,15 @@ bool CConfig::loadSettings()
 	// a no-op anyway) AND being written on the load thread, so a FileWatcher
 	// hot-reload merging here would race that construction. After init() it is safe
 	// (the tables are frozen, read-only).
-	if (LuaLoader::initDone())
+	if (queueLiveAppIdChanges)
 	{
 		LuaLoader::reconcileIntoConfig();
+
+		const auto currentAddedAppIds = addedAppIds.get();
+		std::vector<uint32_t> additions;
+		std::vector<uint32_t> removals;
+		collectAppIdDelta(previousAddedAppIds, currentAddedAppIds, additions, removals);
+		Package::queueAppIdChanges(additions, removals);
 	}
 
 	return true;

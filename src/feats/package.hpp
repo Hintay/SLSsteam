@@ -3,6 +3,7 @@
 #include "../sdk/PackageInfo.hpp"
 
 #include <cstdint>
+#include <vector>
 
 namespace Package {
     // True once tryInitFakeLicenseOnce has injected into pkg0 successfully.
@@ -26,13 +27,18 @@ namespace Package {
     // pending change; the real pkg0 mutation runs on a Steam thread (§8).
     void notifyLicenseChanged();
 
-    // One-shot: inject getAllDepotIds() into pkg0 + Mark/Process. Safe to call
-    // repeatedly; only runs once when pkg0+CUser captured and Status==Available.
+    // Queue already-reconciled config appId changes for live pkg0 mutation. Safe
+    // from the config FileWatcher thread; drained by pumpOnSteamThread.
+    void queueAppIdChanges(const std::vector<uint32_t>& additions, const std::vector<uint32_t>& removals);
+
+    // One-shot: inject the reconciled AdditionalApps set into pkg0 + Mark/Process.
+    // Safe to call repeatedly; only runs once when pkg0+CUser captured and
+    // Status==Available.
     void tryInitFakeLicenseOnce();
 
     // Called from a Steam thread (hkUser_CheckAppOwnership). Runs the one-shot
-    // initial injection, then drains any pending lua hot-reload changes flagged by
-    // notifyLicenseChanged — keeping ALL Steam-table mutation on the Steam thread
-    // (§8: doing it on the foreign FileWatcher thread crashes Steam).
+    // initial injection, then drains pending lua/yaml hot-reload changes — keeping
+    // ALL Steam-table mutation on the Steam thread (§8: doing it on the foreign
+    // FileWatcher thread crashes Steam).
     void pumpOnSteamThread();
 }

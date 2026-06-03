@@ -15,11 +15,13 @@ namespace {
     std::atomic<bool>  g_active{false};
     std::atomic<void*> g_pkg{nullptr};
     std::atomic<void*> g_cuser{nullptr};
-    std::mutex         g_injectMtx;   // guards pkg0 mutation; only taken on a Steam thread now
+    std::mutex         g_injectMtx;   // guards pkg0 mutation and cross-thread pending-change queues
     // Set by notifyLicenseChanged (lua FileWatcher thread); drained by
     // pumpOnSteamThread (Steam thread) so the actual pkg0 mutation + Mark/Process
     // never runs on the foreign FileWatcher thread (§8 cross-thread race → crash).
     std::atomic<bool>  g_pendingChange{false};
+    std::vector<uint32_t> g_pendingConfigAdditions;
+    std::vector<uint32_t> g_pendingConfigRemovals;
 
     // Grow AppIdVec in batches to amortise realloc calls. 16 exceeds the typical lua
     // set size (~10 ids) so a single grow is almost always enough.
@@ -39,6 +41,20 @@ namespace {
             if (entered) active = false;
         }
     };
+
+    static void appendUnique(std::vector<uint32_t>& dst, const std::vector<uint32_t>& src)
+    {
+        for (uint32_t id : src) {
+            bool found = false;
+            for (uint32_t existing : dst) {
+                if (existing == id) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) dst.push_back(id);
+        }
+    }
 }
 
 namespace Package {
@@ -87,6 +103,19 @@ static bool appendAppIdGrowing(CUtlVector<uint32_t>* vec, uint32_t appId)
 void setInjectedPackage(void* pkg) { g_pkg.store(pkg, std::memory_order_release); }
 void setCUser(void* cuser)         { g_cuser.store(cuser, std::memory_order_release); }
 
+void queueAppIdChanges(const std::vector<uint32_t>& additions, const std::vector<uint32_t>& removals)
+{
+    if (!g_config.packageInjection.get()) return;
+    if (additions.empty() && removals.empty()) return;
+
+    {
+        std::lock_guard<std::mutex> lock(g_injectMtx);
+        appendUnique(g_pendingConfigAdditions, additions);
+        appendUnique(g_pendingConfigRemovals, removals);
+    }
+    g_pendingChange.store(true, std::memory_order_release);
+}
+
 // Mark package 0 changed + process pending license updates so Steam re-evaluates
 // ownership without a restart. Do not call while holding g_injectMtx: Steam may
 // re-enter our hooks during ProcessPendingLicenseUpdates, and re-taking the mutex
@@ -120,17 +149,18 @@ void tryInitFakeLicenseOnce()
         if (g_active.load(std::memory_order_acquire)) return; // double-checked
 
         auto* vec = PackageInfo::appIdVec(pkg);
-        const auto ids = LuaLoader::getAllDepotIds();
+        const auto ids = g_config.addedAppIds.get();
         for (uint32_t id : ids) {
             findAndFastRemove(vec, id);                  // drop any existing copy (de-dup)
             if (appendAppIdGrowing(vec, id)) ++added; else ++dropped;
         }
-        // getAllDepotIds() above already injected the full owned set, including the
-        // additions queued during the boot-time lua load. Drain (discard) the pending
-        // queues so the first applyPendingChanges only processes true post-boot deltas
-        // instead of redundantly re-adding the boot set.
+        // The final config set above already includes yaml AdditionalApps plus lua
+        // contributions. Drain boot-time queues so the first live apply only handles
+        // true post-injection deltas instead of redundantly re-applying the boot set.
         LuaLoader::takePendingAdditions();
         LuaLoader::takePendingRemovals();
+        g_pendingConfigAdditions.clear();
+        g_pendingConfigRemovals.clear();
         g_active.store(true, std::memory_order_release);
     }
 
@@ -140,10 +170,10 @@ void tryInitFakeLicenseOnce()
     g_pLog->once("Package: injected %zu appIds into pkg0, license re-evaluated\n", added);
 }
 
-// Apply queued lua hot-reload add/removes to pkg0 + live re-evaluate. MUST run on
-// a Steam thread (§8): doing this from the foreign FileWatcher thread races Steam's
-// license/IPC threads and corrupts them (proven SIGSEGV, Task 8). Only reached via
-// pumpOnSteamThread after g_active, so pkg0 is captured and injected.
+// Apply queued config/lua hot-reload add/removes to pkg0 + live re-evaluate. MUST
+// run on a Steam thread (§8): doing this from the foreign FileWatcher thread races
+// Steam's license/IPC threads and corrupts them (proven SIGSEGV, Task 8). Only
+// reached via pumpOnSteamThread after g_active, so pkg0 is captured and injected.
 static void applyPendingChanges()
 {
     void* pkg = g_pkg.load(std::memory_order_acquire);
@@ -151,14 +181,25 @@ static void applyPendingChanges()
 
     size_t changed = 0;
     std::vector<uint32_t> removals;
+    std::vector<uint32_t> additions;
     std::vector<uint32_t> removed;
     {
         std::lock_guard<std::mutex> lock(g_injectMtx);
         auto* vec = PackageInfo::appIdVec(pkg);
-        removals = LuaLoader::takePendingRemovals();
-        for (uint32_t id : removals)
+        appendUnique(removals, LuaLoader::takePendingRemovals());
+        appendUnique(removals, g_pendingConfigRemovals);
+        appendUnique(additions, LuaLoader::takePendingAdditions());
+        appendUnique(additions, g_pendingConfigAdditions);
+        g_pendingConfigRemovals.clear();
+        g_pendingConfigAdditions.clear();
+
+        const auto finalAddedAppIds = g_config.addedAppIds.get();
+        for (uint32_t id : removals) {
+            if (finalAddedAppIds.contains(id)) continue;
             if (findAndFastRemove(vec, id)) { ++changed; removed.push_back(id); }
-        for (uint32_t id : LuaLoader::takePendingAdditions()) {
+        }
+        for (uint32_t id : additions) {
+            if (!finalAddedAppIds.contains(id)) continue;
             findAndFastRemove(vec, id);                 // drop any existing copy first (de-dup, matches tryInit)
             if (appendAppIdGrowing(vec, id)) ++changed;
         }
@@ -186,9 +227,9 @@ void notifyLicenseChanged()
     g_pendingChange.store(true, std::memory_order_release);
 }
 
-// Runs on a Steam thread. Performs the one-shot initial injection, then drains any
-// pending lua hot-reload changes — all Steam-thread-side so nothing mutates Steam's
-// tables from a foreign thread. Guard against same-thread re-entry because
+// Runs on a Steam thread. Performs the one-shot initial injection, then drains
+// pending lua/yaml hot-reload changes — all Steam-thread-side so nothing mutates
+// Steam's tables from a foreign thread. Guard against same-thread re-entry because
 // ProcessPendingLicenseUpdates may call back into hooks that also pump.
 void pumpOnSteamThread()
 {
