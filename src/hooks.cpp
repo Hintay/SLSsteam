@@ -278,8 +278,10 @@ static uint32_t hkProtoBufMsgBase_Send(CProtoBufMsgBase* pMsg)
 __attribute__((hot))
 static bool hkCWebSocketConnection_BBuildAndAsyncSendFrame(void* pThis, int opcode, uint8_t* pubData, uint32_t cubData)
 {
-	// opcode 0x8 == WebSocket binary frame (the raw Steam packet payload).
-	if (opcode == 0x8)
+	// opcode 0x2 == WebSocket binary frame (the raw Steam packet payload). NOTE:
+	// 0x2 is the RFC6455 binary opcode (the runbook's "0x8" was the CLOSE opcode of
+	// an unrelated call-site; live data frames arrive with opcode 2, verified).
+	if (opcode == 0x2)
 		RequestCode::onSendFrame(pubData, cubData);
 	return Hooks::CWebSocketConnection_BBuildAndAsyncSendFrame.tramp.fn(pThis, opcode, pubData, cubData);
 }
