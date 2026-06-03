@@ -90,4 +90,7 @@ namespace LuaLoader {
     // Returns true and writes outCode on success; outCode is validated non-zero.
     bool fetchManifestCode(uint32_t appId, uint32_t depotId, uint64_t gid, uint64_t& outCode);
 
+    // Purchase timestamp registered for appId (via setmanifestid/per-file), or 0.
+    uint32_t getPurchaseTime(uint32_t appId);
+
 } // namespace LuaLoader

@@ -371,6 +371,31 @@ namespace Patterns
 		};
 	}
 
+	namespace CSteamUIAppController
+	{
+		Pattern_t GetAppByID
+		{
+			"CSteamUIAppController::GetAppByID",
+			"E8 ? ? ? ? 05 ? ? ? ? 55 89 E5 57 56 53 83 EC 4C 8B 5D 10 8B 75 08 89 45 C8 8B 80 E0 09 00 00",
+			MemHlp::SigFollowMode::None, &g_modSteamUI
+		};
+		Pattern_t FillInAppOverview
+		{
+			"CSteamUIAppController::FillInAppOverview",
+			"55 89 E5 57 56 53 E8 ? ? ? ? 81 C3 ? ? ? ? 81 EC 8C 00 00 00 8B 7D 08 89 5D A4 E8 ? ? ? ? 84 C0",
+			MemHlp::SigFollowMode::None, &g_modSteamUI
+		};
+	}
+	namespace CUpdateManager
+	{
+		Pattern_t MarkAppChange
+		{
+			"CUpdateManager::MarkAppChange",
+			"E8 ? ? ? ? 05 ? ? ? ? 55 89 E5 57 56 53 83 EC 3C 8B 5D 10 8B 75 0C 89 45 D4 8B 80 E0 09 00 00 85 DB 0F 94 C1",
+			MemHlp::SigFollowMode::None, &g_modSteamUI
+		};
+	}
+
 	std::vector<Pattern_t*> patterns;
 }
 

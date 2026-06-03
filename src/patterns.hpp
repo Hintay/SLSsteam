@@ -132,6 +132,16 @@ namespace Patterns
 		extern Pattern_t ServerResponded;
 	}
 
+	namespace CSteamUIAppController
+	{
+		extern Pattern_t GetAppByID;
+		extern Pattern_t FillInAppOverview;
+	}
+	namespace CUpdateManager
+	{
+		extern Pattern_t MarkAppChange;
+	}
+
 	extern std::vector<Pattern_t*> patterns;
 	bool init();
 }
