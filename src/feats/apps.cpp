@@ -11,6 +11,7 @@
 #include "../globals.hpp"
 
 #include "fakeappid.hpp"
+#include "package.hpp"
 
 bool Apps::applistRequested;
 std::map<uint32_t, int> Apps::appIdOwnerOverride;
@@ -128,6 +129,14 @@ bool Apps::checkAppOwnership(uint32_t appId, CAppOwnershipInfo* pInfo)
 
 void Apps::getSubscribedApps(uint32_t* appList, size_t size, uint32_t& count)
 {
+	// When package injection is active, added apps enter the library via pkg0's
+	// AppIdVec; appending them here too would double-list them.
+	if (g_config.packageInjection.get() && Package::isActive())
+	{
+		applistRequested = true;
+		return;
+	}
+
 	//Valve calls this function twice, once with size of 0 then again
 	if (!size || !appList)
 	{

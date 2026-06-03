@@ -133,6 +133,7 @@ bool CConfig::loadSettings()
 	useWhiteList = getSetting<bool>(node, "UseWhitelist", false);
 	automaticFilter = getSetting<bool>(node, "AutoFilterList", true);
 	playNotOwnedGames = getSetting<bool>(node, "PlayNotOwnedGames", false);
+	packageInjection = getSetting<bool>(node, "PackageInjection", false);
 	safeMode = getSetting<bool>(node, "SafeMode", false);
 	notifications = getSetting<bool>(node, "Notifications", true);
 	warnHashMissmatch = getSetting<bool>(node, "WarnHashMissmatch", false);
@@ -149,6 +150,7 @@ bool CConfig::loadSettings()
 	g_pLog->info("UseWhitelist: %i\n", useWhiteList.get());
 	g_pLog->info("AutoFilterList: %i\n", automaticFilter.get());
 	g_pLog->info("PlayNotOwnedGames: %i\n", playNotOwnedGames.get());
+	g_pLog->info("PackageInjection: %i\n", packageInjection.get());
 	g_pLog->info("SafeMode: %i\n", safeMode.get());
 	g_pLog->info("Notifications: %i\n", notifications.get());
 	g_pLog->info("WarnHashMissmatch: %i\n", warnHashMissmatch.get());
