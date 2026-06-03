@@ -2,28 +2,32 @@
 
 #include <cstdint>
 
-class CProtoBufMsgBase;
+struct CNetPacket;
 
 namespace Achievements
 {
-	// Outgoing hook: intercepts Player.GetUserStats#1 ServiceMethod calls (EMsg 151)
-	// and CMsgClientGetUserStats requests (EMsg 818). For controlled apps, redirects
-	// the stats query to the configured Steam ID (from LuaLoader::getStatSteamId).
-	// Tracks jobid_source -> appId for ServiceMethod path so recvMessage can patch
-	// the corresponding response.
-	void sendMessage(CProtoBufMsgBase* msg);
+	// Raw outgoing hook (from hkCWebSocketConnection_BBuildAndAsyncSendFrame). For a
+	// Player.GetUserStats#1 ServiceMethod call (EMsg 151) or a legacy
+	// CMsgClientGetUserStats (EMsg 818) of a redirected app, rewrite the donor
+	// steamid into the request and (151) track jobid_source -> appId. If the frame
+	// must be re-sent modified, returns true and points outData/outSize at a pooled
+	// replacement packet (valid until the next call); the caller sends that instead.
+	// Returns false to send the original frame unchanged.
+	//
+	// The ServiceMethod (151) path provably does NOT traverse CProtoBufMsgBase::Send
+	// on modern Steam, so it MUST be intercepted here at the raw packet layer (same
+	// reason requestcode moved here). The stats CAPIJob fallback stays a no-op.
+	bool onSendFrame(const uint8_t* pubData, uint32_t cubData,
+	                 const uint8_t*& outData, uint32_t& outSize);
 
-	// Incoming hook: patches Player.GetUserStats responses (EMsg 147) and
-	// CMsgClientGetUserStatsResponse messages (EMsg 819) for controlled apps,
-	// clearing stats/achievements and forcing eresult = OK so Steam reads from
-	// its local cache instead of overwriting it with the target account's data.
-	// Non-const: this mutates msg->header / the body, matching the other recv
-	// feats (Ticket::recvMsg, Misc::recvMsg, RequestCode::recvMsg).
-	void recvMessage(CProtoBufMsgBase* msg);
+	// Raw incoming hook (from hkCCMConnection_RecvPkt). For a matching
+	// Player.GetUserStats#1 response (EMsg 147, jobid_target pending) or a legacy
+	// CMsgClientGetUserStatsResponse (EMsg 819) of a redirected app, clear the stat
+	// values and force eresult = OK so Steam keeps the schema but falls back to its
+	// local achievement cache. Rewrites pkt->m_pubData / m_cubData in place.
+	void onRecvPacket(CNetPacket* pkt);
 
-	// Called from hkCAPIJob_GetPlayerStats. Previously forced NO_CONNECTION to
-	// block live stats; now a no-op since the network hooks handle redirection.
-	// Kept for hook-wiring compatibility — removing the detour would require
-	// changes in hooks.cpp and patterns that are outside T8 scope.
+	// Called from hkCAPIJob_GetPlayerStats. No-op: the network-layer redirect above
+	// handles stats; the detour is kept only for hook-wiring compatibility.
 	void getPlayerStats(uint32_t& eresult);
 }

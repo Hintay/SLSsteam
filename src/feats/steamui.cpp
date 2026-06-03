@@ -1,5 +1,7 @@
 #include "steamui.hpp"
 
+#include "apps.hpp"
+
 #include "../hooks.hpp"
 #include "../config.hpp"
 #include "../lua/LuaLoader.hpp"
@@ -22,20 +24,19 @@ void setController(void* p)       { g_controller.store(p, std::memory_order_rele
 void setAppChangeSource(void* p)  { g_appChangeSource.store(p, std::memory_order_release); }
 
 // CONCURRENCY: called from notifyLicenseChanged with g_injectMtx HELD. The Steam
-// calls below all reach the REAL originals: isSubscribed goes through CUser's
-// trampoline; GetAppByID/MarkAppChange go through THEIR detour trampolines
-// (.tramp.fn) — i.e. they bypass our own capture hooks. None of these take a
-// mutex or re-enter Package code, so there is no same-thread re-lock of the
-// non-recursive g_injectMtx. (Steam's own threads reacting to MarkAppChange may
-// contend for g_injectMtx cross-thread — a brief wait, never a deadlock.)
+// calls below all reach the REAL originals: GetAppByID/MarkAppChange go through
+// THEIR detour trampolines (.tramp.fn) — i.e. they bypass our own capture hooks.
+// None of these take a mutex or re-enter Package code, so there is no same-thread
+// re-lock of the non-recursive g_injectMtx. (Steam's own threads reacting to
+// MarkAppChange may contend for g_injectMtx cross-thread — a brief wait, never a
+// deadlock.)
 void removeAppAndSendChange(uint32_t appId)
 {
     void* ctrl = g_controller.load(std::memory_order_acquire);
     void* src  = g_appChangeSource.load(std::memory_order_acquire);
     if (!ctrl || !src) return;
-    // Don't clear ownership of a genuinely-subscribed app (mirror OST IsOwned guard).
-    auto* u = g_pSteamEngine ? g_pSteamEngine->getUser(0) : nullptr;
-    if (u && u->isSubscribed(appId)) return;
+    // Don't clear ownership of apps proven to be genuinely subscribed.
+    if (Apps::isGenuinelyOwned(appId)) return;
     void* app = Hooks::CSteamUIAppController_GetAppByID.tramp.fn(ctrl, appId, false);
     if (!app) return;
     CSteamApp::clearOwnership(app);                                // [app+0x18] = 0
@@ -45,8 +46,8 @@ void removeAppAndSendChange(uint32_t appId)
 
 // Stamps the lua PurchasedTime into the source CSteamApp BEFORE the original
 // FillInAppOverview runs, relying on the original COPYING +0x28 into the overview
-// (not recomputing/overwriting it) — same as OST. This hook fires 0 times on the
-// Deck (CEF), so this ordering assumption must be validated on DESKTOP classic UI.
+// instead of recomputing/overwriting it. This hook fires 0 times on the Deck
+// (CEF), so this ordering assumption must be validated on DESKTOP classic UI.
 void stampPurchaseTimeIfControlled(void** ppHolder)
 {
     if (!g_config.packageInjection.get()) return;   // feature opt-in: inert when off

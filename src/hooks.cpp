@@ -12,6 +12,7 @@
 #include "sdk/CSteamEngine.hpp"
 #include "sdk/CSteamMatchmakingServers.hpp"
 #include "sdk/CUser.hpp"
+#include "sdk/EReleaseState.hpp"
 #include "sdk/EResult.hpp"
 #include "sdk/IClientAppManager.hpp"
 #include "sdk/IClientApps.hpp"
@@ -185,7 +186,7 @@ static int hkLoadDepotDecryptionKey(void* pObject, uint32_t foo, char* KeyName, 
 	// depot decryption-key read and fall through for everything else. KeyName is
 	// "Software\\Valve\\Steam\\Depots\\<depotId>\\DecryptionKey"; Key is a direct
 	// output buffer of KeySize bytes (observed 128) and the function returns the
-	// number of bytes written. This is the function OST hooks (Hooks_Decryption).
+	// number of bytes written.
 	if (KeyName)
 	{
 		const char* tag = strstr(KeyName, "\\DecryptionKey");
@@ -258,14 +259,12 @@ static void hkProtoBufMsgBase_InitFromPacket(CProtoBufMsgBase* pMsg, void* pSrc)
 
 	g_pLog->debug("Received ProtoBufMsg of type %u with type %s\n", pMsg->type, MemHlp::getTypeName(pMsg));
 
-	Achievements::recvMessage(pMsg);
 	Misc::recvMsg(pMsg);
 	Ticket::recvMsg(pMsg);
 }
 
 static uint32_t hkProtoBufMsgBase_Send(CProtoBufMsgBase* pMsg)
 {
-	Achievements::sendMessage(pMsg);
 	Apps::sendMsg(pMsg);
 	FakeAppIds::sendMsg(pMsg);
 
@@ -280,18 +279,29 @@ static bool hkCWebSocketConnection_BBuildAndAsyncSendFrame(void* pThis, int opco
 {
 	// opcode 0x2 == WebSocket binary frame (the raw Steam packet payload; 0x2 is the
 	// RFC6455 binary opcode — the runbook's "0x8" was an unrelated CLOSE call-site).
-	// onSendFrame returns true for the GetManifestRequestCode ServiceMethod call:
-	// DROP the frame (never sent to the CM) and report success; its response is
-	// fabricated client-side and injected on the recv path. catch(...) so a C++
-	// exception can never unwind through this C trampoline (would std::terminate).
-	bool drop = false;
+	// Both consumers are wrapped in catch(...) so a C++ exception can never unwind
+	// through this C trampoline (would std::terminate).
 	if (opcode == 0x2)
 	{
+		// requestcode: returns true for the GetManifestRequestCode ServiceMethod call
+		// — DROP the frame (never sent to the CM); its response is fabricated + injected
+		// on the recv path.
+		bool drop = false;
 		try { drop = RequestCode::onSendFrame(pubData, cubData); }
 		catch (...) { drop = false; }
+		if (drop)
+			return true;
+
+		// achievements: returns true to REPLACE a Player.GetUserStats query with one
+		// whose steamid is redirected to a donor — send the rewritten packet instead.
+		const uint8_t* newData = nullptr;
+		uint32_t newSize = 0;
+		bool replace = false;
+		try { replace = Achievements::onSendFrame(pubData, cubData, newData, newSize); }
+		catch (...) { replace = false; }
+		if (replace)
+			return Hooks::CWebSocketConnection_BBuildAndAsyncSendFrame.tramp.fn(pThis, opcode, const_cast<uint8_t*>(newData), newSize);
 	}
-	if (drop)
-		return true;
 	return Hooks::CWebSocketConnection_BBuildAndAsyncSendFrame.tramp.fn(pThis, opcode, pubData, cubData);
 }
 
@@ -300,8 +310,7 @@ static void* hkCCMConnection_RecvPkt(void* pThis, CNetPacket* pPacket)
 {
 	// If a dropped GetManifestRequestCode's code fetch has completed, deliver the
 	// fabricated ServiceMethodResponse by borrowing this incoming packet as a carrier
-	// for one extra oRecvPkt call (OST's g_InjectPkt technique), then restore and
-	// deliver the real packet below.
+	// for one extra oRecvPkt call, then restore and deliver the real packet below.
 	if (pPacket)
 	{
 		const uint8_t* injData = nullptr;
@@ -320,6 +329,12 @@ static void* hkCCMConnection_RecvPkt(void* pThis, CNetPacket* pPacket)
 			pPacket->m_pubData = origData;
 			pPacket->m_cubData = origSize;
 		}
+
+		// achievements: for a matching Player.GetUserStats response (147) or legacy
+		// GetUserStatsResponse (819), clear stats + force eresult OK in place before
+		// the original processes the packet. catch(...) guards the C trampoline.
+		try { Achievements::onRecvPacket(pPacket); }
+		catch (...) {}
 	}
 	return Hooks::CCMConnection_RecvPkt.tramp.fn(pThis, pPacket);
 }
@@ -421,6 +436,20 @@ static uint32_t hkUser_CheckAppOwnership(void* pClientUser, uint32_t appId, CApp
 		appId,
 		ret
 	);
+
+	// Refresh the genuine-owned cache from Steam's original ownership path before
+	// SLSsteam's spoofers mutate pOwnershipInfo. This keeps false positives from
+	// sticking for the whole session.
+	if (pOwnershipInfo && g_config.isAddedAppId(appId))
+	{
+		const bool genuine = ret && pOwnershipInfo->existInPackageNums > 1;
+		Apps::setGenuinelyOwned(appId, genuine);
+		if (genuine)
+		{
+			pOwnershipInfo->releaseState = ERELEASESTATE_RELEASED;
+			return ret;
+		}
+	}
 
 	if (Apps::checkAppOwnership(appId, pOwnershipInfo) || DLC::checkAppOwnership(appId, pOwnershipInfo))
 	{
@@ -856,7 +885,7 @@ static bool hkClientUser_BLoggedOn(void* pClientUser)
 static uint32_t hkClientUser_BUpdateOwnershipTicket(void* pClientUser, uint32_t appId, bool staleOnly)
 {
 	const auto cached = Ticket::getCachedTicket(appId);
-	if (g_pSteamEngine->getUser(0)->isSubscribed(appId) && !cached.steamId)
+	if (Apps::isGenuinelySubscribed(appId) && !cached.steamId)
 	{
 		staleOnly = false;
 		g_pLog->debug("Force re-requesting OwnershipInfo for %u\n", appId);

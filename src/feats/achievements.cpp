@@ -1,249 +1,252 @@
 #include "achievements.hpp"
 
-#include "../sdk/CProtoBufMsgBase.hpp"
-#include "../sdk/CSteamEngine.hpp"
-#include "../sdk/CUser.hpp"
+#include "apps.hpp"
+
+#include "../sdk/CNetPacket.hpp"
+#include "../sdk/CProtoBufMsgBase.hpp"   // EMsgType enum + CMsgProtoBufHeader
 #include "../sdk/EResult.hpp"
 #include "../sdk/protobufs/slssteam_servicemethods.pb.h"
 #include "../sdk/protobufs/steammessages_clientserver_userstats.pb.h"
 
-#include "../config.hpp"
-#include "../globals.hpp"
 #include "../lua/LuaLoader.hpp"
 #include "../log.hpp"
 
+#include <atomic>
+#include <cstring>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
-// User-stats interception (mirrors OST Hooks_NetPacket.cpp UserStats section).
-//
-// Steam fetches achievement/stat data for the signed-in account via two paths:
+// User-stats interception at the raw packet layer. Steam fetches achievement/stat
+// data via two paths:
 //   1. ServiceMethod (EMsg 151/147): Player.GetUserStats#1
 //   2. Legacy client message (EMsg 818/819): CMsgClientGetUserStats
 //
-// For a controlled app the user does NOT genuinely own, we redirect the stats
-// query to a configurable donor Steam ID so the donor account's achievements
-// are fetched instead of the signed-in account's. The response is then cleared
-// so Steam falls back to its local cache — the same as OST's approach.
+// The ServiceMethod (151/147) path does NOT traverse CProtoBufMsgBase::Send/
+// InitFromPacket on modern Steam (proven during the requestcode work — outgoing 151
+// never reached that hook), so achievements is intercepted here at the raw layer:
+//   outgoing CWebSocketConnection::BBuildAndAsyncSendFrame
+//   incoming CCMConnection::RecvPkt(CNetPacket*)
 //
-// Redirect gate: shouldRedirectStats(appId) = isAddedAppId(appId) && !isSubscribed(appId)
-//   - isAddedAppId covers both YAML addedAppIds and Lua ownedAppIds (merged at
-//     init) — the "this app is managed by SLSsteam" set, consistent with the
-//     gate used by Apps::checkAppOwnership and the DLC hooks.
-//   - The added !isSubscribed() term excludes apps the user genuinely owns:
-//     OST redirects every configured app unconditionally, but for a genuinely
-//     owned app the real account already has valid achievements, so pulling a
-//     donor's data would clobber them. Non-owned controlled apps still follow
-//     OST's donor-redirect behaviour (donor = setstat() override, else default).
+// For added (lua/config) apps that are not genuinely owned, the outgoing query's
+// steamid is rewritten to a donor (so the server returns a valid OK response with
+// the achievement schema), and the response's stat values are then cleared (Steam
+// keeps the schema but falls back to its local cache). Redirect only controlled
+// apps that have not been proven genuinely owned by Steam's original ownership
+// path. Do not use CUser::isSubscribed() here: package injection can make fake
+// ownership look subscribed and would exclude exactly the apps that need redirecting.
+
 namespace Achievements
 {
 	namespace
 	{
-		// ServiceMethod target name for the Player.GetUserStats call.
 		constexpr char TARGET_JOB_NAME[] = "Player.GetUserStats#1";
 
-		// jobid_source (outgoing call) -> appId for pending ServiceMethod requests.
-		// Protected by g_mutex; accessed from the Send hook and the InitFromPacket hook.
-		// Bounded by the number of controlled apps; an orphaned entry (151 sent but
-		// no 147 ever returns) is benign — at most one per app per session.
+		constexpr uint32_t kMaxHdr  = 1024;
+		constexpr uint32_t kMaxBody = 8192;
+		constexpr uint32_t kMaxPkt  = sizeof(MsgHdr) + kMaxHdr + kMaxBody;
+		constexpr int      kPoolSize = 8;
+
+		// jobid_source (outgoing 151) -> appId. Touched from the send hook and the
+		// recv hook; guard with g_mutex. g_pendingCount is a lock-free fast-path gate
+		// for the recv hook (runs on every incoming packet); only written under g_mutex.
 		std::unordered_map<uint64_t, uint32_t> g_pending;
-		std::mutex g_mutex;
+		std::mutex          g_mutex;
+		std::atomic<size_t> g_pendingCount{0};
 
-		// Returns true if appId is controlled by SLSsteam (in the added-app set).
-		inline bool isControlled(uint32_t appId)
-		{
-			return g_config.isAddedAppId(appId);
-		}
+		// Replacement-packet pools. The send pool must outlive the async send
+		// (BBuildAndAsyncSendFrame copies synchronously, but a small ring keeps the
+		// buffer lifetime safe regardless); the recv pool must outlive the oRecvPkt that
+		// consumes the rewritten packet. Each pool is touched by a single thread
+		// (net-send / cm-recv), so it needs no synchronisation of its own.
+		uint8_t g_sendPool[kPoolSize][kMaxPkt];
+		int     g_sendIdx = 0;
+		uint8_t g_recvPool[kPoolSize][kMaxPkt];
+		int     g_recvIdx = 0;
 
-		// Returns true if a stats query for appId should be redirected to the
-		// configured donor SteamID. We only redirect apps the user does NOT
-		// genuinely own: for a genuinely-owned app (isSubscribed true) the real
-		// account already has valid achievements, so pulling a stranger's data
-		// would clobber them. Non-owned controlled apps still follow OST's
-		// donor-redirect behaviour. isSubscribed is the same genuine-ownership
-		// oracle used by Apps/DLC/FakeAppIds and is not spoofed for added apps.
+		// Controlled app, unless the original ownership path proved it is genuinely owned.
 		inline bool shouldRedirectStats(uint32_t appId)
 		{
-			return isControlled(appId) &&
-			       !g_pSteamEngine->getUser(0)->isSubscribed(appId);
+			return Apps::shouldTreatAsFakeOwned(appId);
+		}
+
+		// Assemble [MsgHdr (original eMsg, new headerLength)][newHdr][newBody] into a
+		// pooled buffer. Returns false if the parts exceed the pool bounds.
+		bool assemble(uint8_t* buf, const MsgHdr* origHdr,
+		              const std::string& hdr, const std::string& body,
+		              const uint8_t*& out, uint32_t& outSize)
+		{
+			if (hdr.size() > kMaxHdr || body.size() > kMaxBody) return false;
+			MsgHdr* mh = reinterpret_cast<MsgHdr*>(buf);
+			mh->eMsg = origHdr->eMsg;
+			mh->headerLength = static_cast<uint32_t>(hdr.size());
+			memcpy(buf + sizeof(MsgHdr), hdr.data(), hdr.size());
+			memcpy(buf + sizeof(MsgHdr) + hdr.size(), body.data(), body.size());
+			out = buf;
+			outSize = static_cast<uint32_t>(sizeof(MsgHdr) + hdr.size() + body.size());
+			return true;
 		}
 	}
 
-	// ── Outgoing hook ────────────────────────────────────────────────────────
-
-	void sendMessage(CProtoBufMsgBase* msg)
+	bool onSendFrame(const uint8_t* pubData, uint32_t cubData,
+	                 const uint8_t*& outData, uint32_t& outSize)
 	{
-		if (!msg)
-		{
-			return;
-		}
+		uint16_t eMsg = 0;
+		const uint8_t *pHdr = nullptr, *pBody = nullptr;
+		uint32_t cbHdr = 0, cbBody = 0;
+		if (!netpacket::unpackRaw(pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) return false;
 
 		// ── Path 1: ServiceMethod Player.GetUserStats#1 (EMsg 151) ────────────
-		if (msg->type == EMSG_SERVICE_METHOD_CALL_FROM_CLIENT && msg->header)
+		if (eMsg == EMSG_SERVICE_METHOD_CALL_FROM_CLIENT)
 		{
-			if (msg->header->has_target_job_name() &&
-			    msg->header->target_job_name() == TARGET_JOB_NAME)
+			CMsgProtoBufHeader hdr;
+			if (!hdr.ParseFromArray(pHdr, static_cast<int>(cbHdr))) return false;
+			if (!hdr.has_target_job_name() || hdr.target_job_name() != TARGET_JOB_NAME) return false;
+
+			CPlayer_GetUserStats_Request req;
+			if (!req.ParseFromArray(pBody, static_cast<int>(cbBody))) return false;
+			// Initial live-stats fetch: app id is present and this is not a schema-only probe.
+			if (!req.has_appid() || req.has_sha_schema()) return false;
+
+			const uint32_t appId = req.appid();
+			if (!shouldRedirectStats(appId)) return false;
+			if (!hdr.has_jobid_source()) return false;
+
+			const uint64_t jobId = hdr.jobid_source();
+			const uint64_t donor = LuaLoader::getStatSteamId(appId);
+			req.set_steamid(donor);
+
+			std::string newBody;
+			if (!req.SerializeToString(&newBody)) return false;
+			const std::string keepHdr(reinterpret_cast<const char*>(pHdr), cbHdr); // header unchanged
+
 			{
-				const auto body = msg->getBody<CPlayer_GetUserStats_Request>();
-
-				// OST condition: has appid, no sha_schema (initial fetch, not schema-only probe).
-				if (!body->has_appid() || body->has_sha_schema())
-				{
-					return;
-				}
-
-				const uint32_t appId = body->appid();
-				if (!shouldRedirectStats(appId))
-				{
-					return;
-				}
-
-				if (!msg->header->has_jobid_source())
-				{
-					// Malformed packet — skip to avoid a stale k_GIDNil match on recv.
-					return;
-				}
-
-				const uint64_t jobId = msg->header->jobid_source();
-				const uint64_t statSteamId = LuaLoader::getStatSteamId(appId);
-
-				body->set_steamid(statSteamId);
-
-				g_pLog->debug
-				(
-					"Achievements: ServiceMethod redirect app=%u steamid=%llu (jobid=%llu)\n",
-					appId,
-					static_cast<unsigned long long>(statSteamId),
-					static_cast<unsigned long long>(jobId)
-				);
-
-				{
-					std::lock_guard<std::mutex> lock(g_mutex);
-					g_pending[jobId] = appId;
-				}
+				std::lock_guard<std::mutex> lock(g_mutex);
+				g_pending[jobId] = appId;
+				g_pendingCount.store(g_pending.size(), std::memory_order_release);
 			}
-			return;
+
+			const bool ok = assemble(g_sendPool[g_sendIdx], reinterpret_cast<const MsgHdr*>(pubData),
+			                         keepHdr, newBody, outData, outSize);
+			g_sendIdx = (g_sendIdx + 1) % kPoolSize;
+			if (ok)
+				g_pLog->debug("Achievements: raw 151 redirect app=%u steamid=%llu (jobid=%llu)\n",
+				              appId, static_cast<unsigned long long>(donor), static_cast<unsigned long long>(jobId));
+			return ok;
 		}
 
-		// ── Path 2: Legacy client stats request CMsgClientGetUserStats (EMsg 818) ──
-		if (msg->type == EMSG_REQUEST_USERSTATS)
+		// ── Path 2: Legacy CMsgClientGetUserStats (EMsg 818) ──────────────────
+		if (eMsg == EMSG_REQUEST_USERSTATS)
 		{
-			const auto body = msg->getBody<CMsgClientGetUserStats>();
+			CMsgClientGetUserStats req;
+			if (!req.ParseFromArray(pBody, static_cast<int>(cbBody))) return false;
+			if (!req.has_game_id()) return false;
+			// schema_local_version == -1 signals an initial live-stats fetch.
+			if (!req.has_schema_local_version() || req.schema_local_version() != -1) return false;
 
-			if (!body->has_game_id())
-			{
-				return;
-			}
+			const uint32_t appId = static_cast<uint32_t>(req.game_id());
+			if (!shouldRedirectStats(appId)) return false;
 
-			// schema_local_version == -1 signals an initial live-stats fetch
-			// (not a schema-only probe). Mirror OST's condition.
-			if (!body->has_schema_local_version() || body->schema_local_version() != -1)
-			{
-				return;
-			}
+			const uint64_t donor = LuaLoader::getStatSteamId(appId);
+			req.set_steam_id_for_user(donor);
 
-			// game_id upper 32 bits = game type; low 32 bits = appId (same as OST).
-			const uint32_t appId = static_cast<uint32_t>(body->game_id());
-			if (!shouldRedirectStats(appId))
-			{
-				return;
-			}
+			std::string newBody;
+			if (!req.SerializeToString(&newBody)) return false;
+			const std::string keepHdr(reinterpret_cast<const char*>(pHdr), cbHdr);
 
-			const uint64_t statSteamId = LuaLoader::getStatSteamId(appId);
-			body->set_steam_id_for_user(statSteamId);
-
-			g_pLog->debug
-			(
-				"Achievements: legacy redirect app=%u steamid=%llu\n",
-				appId,
-				static_cast<unsigned long long>(statSteamId)
-			);
+			const bool ok = assemble(g_sendPool[g_sendIdx], reinterpret_cast<const MsgHdr*>(pubData),
+			                         keepHdr, newBody, outData, outSize);
+			g_sendIdx = (g_sendIdx + 1) % kPoolSize;
+			if (ok)
+				g_pLog->debug("Achievements: raw 818 redirect app=%u steamid=%llu\n",
+				              appId, static_cast<unsigned long long>(donor));
+			return ok;
 		}
+
+		return false;
 	}
 
-	// ── Incoming hook ────────────────────────────────────────────────────────
-
-	void recvMessage(CProtoBufMsgBase* msg)
+	void onRecvPacket(CNetPacket* pkt)
 	{
-		if (!msg)
-		{
-			return;
-		}
+		if (!pkt) return;
+		uint16_t eMsg = 0;
+		const uint8_t *pHdr = nullptr, *pBody = nullptr;
+		uint32_t cbHdr = 0, cbBody = 0;
+		if (!netpacket::unpackRaw(pkt->m_pubData, pkt->m_cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) return;
 
 		// ── Path 1: ServiceMethod response (EMsg 147) ─────────────────────────
-		if (msg->type == EMSG_SERVICE_METHOD_RESPONSE && msg->header)
+		if (eMsg == EMSG_SERVICE_METHOD_RESPONSE)
 		{
-			const uint64_t jobId = msg->header->jobid_target();
+			if (g_pendingCount.load(std::memory_order_acquire) == 0) return; // fast path
+
+			CMsgProtoBufHeader hdr;
+			if (!hdr.ParseFromArray(pHdr, static_cast<int>(cbHdr)) || !hdr.has_jobid_target()) return;
+			const uint64_t jobId = hdr.jobid_target();
 
 			uint32_t appId = 0;
 			{
 				std::lock_guard<std::mutex> lock(g_mutex);
 				const auto it = g_pending.find(jobId);
-				if (it == g_pending.end())
-				{
-					return;
-				}
+				if (it == g_pending.end()) return;   // not one of ours
 				appId = it->second;
 				g_pending.erase(it);
+				g_pendingCount.store(g_pending.size(), std::memory_order_release);
 			}
 
-			// Force OK so Steam processes the (now cleared) response instead of
-			// treating it as an error and keeping stale/wrong data.
-			msg->header->set_eresult(ERESULT_OK);
+			CPlayer_GetUserStats_Response resp;
+			if (!resp.ParseFromArray(pBody, static_cast<int>(cbBody))) return;
+			resp.clear_stats();                 // keep schema, drop the donor's stat values
+			hdr.set_eresult(ERESULT_OK);
 
-			const auto body = msg->getBody<CPlayer_GetUserStats_Response>();
-			body->clear_stats();
+			std::string newHdr, newBody;
+			if (!hdr.SerializeToString(&newHdr) || !resp.SerializeToString(&newBody)) return;
 
-			g_pLog->debug
-			(
-				"Achievements: ServiceMethod response cleared for app=%u (jobid=%llu)\n",
-				appId,
-				static_cast<unsigned long long>(jobId)
-			);
+			const uint8_t* out = nullptr; uint32_t outSize = 0;
+			if (assemble(g_recvPool[g_recvIdx], reinterpret_cast<const MsgHdr*>(pkt->m_pubData),
+			             newHdr, newBody, out, outSize))
+			{
+				pkt->m_pubData = const_cast<uint8_t*>(out);
+				pkt->m_cubData = outSize;
+				g_recvIdx = (g_recvIdx + 1) % kPoolSize;
+				g_pLog->debug("Achievements: raw 147 cleared app=%u (jobid=%llu)\n",
+				              appId, static_cast<unsigned long long>(jobId));
+			}
 			return;
 		}
 
 		// ── Path 2: Legacy response CMsgClientGetUserStatsResponse (EMsg 819) ──
-		if (msg->type == EMSG_REQUEST_USERSTATS_RESPONSE)
+		if (eMsg == EMSG_REQUEST_USERSTATS_RESPONSE)
 		{
-			const auto body = msg->getBody<CMsgClientGetUserStatsResponse>();
+			CMsgClientGetUserStatsResponse resp;
+			if (!resp.ParseFromArray(pBody, static_cast<int>(cbBody)) || !resp.has_game_id()) return;
+			const uint32_t appId = static_cast<uint32_t>(resp.game_id());
+			if (!shouldRedirectStats(appId)) return;
 
-			if (!body->has_game_id())
+			resp.clear_stats();
+			resp.clear_achievement_blocks();
+			resp.set_eresult(ERESULT_OK);
+
+			std::string newBody;
+			if (!resp.SerializeToString(&newBody)) return;
+			const std::string keepHdr(reinterpret_cast<const char*>(pHdr), cbHdr);
+
+			const uint8_t* out = nullptr; uint32_t outSize = 0;
+			if (assemble(g_recvPool[g_recvIdx], reinterpret_cast<const MsgHdr*>(pkt->m_pubData),
+			             keepHdr, newBody, out, outSize))
 			{
-				return;
+				pkt->m_pubData = const_cast<uint8_t*>(out);
+				pkt->m_cubData = outSize;
+				g_recvIdx = (g_recvIdx + 1) % kPoolSize;
+				g_pLog->debug("Achievements: raw 819 cleared app=%u\n", appId);
 			}
-
-			// game_id upper 32 bits = game type; low 32 bits = appId (same as OST).
-			const uint32_t appId = static_cast<uint32_t>(body->game_id());
-			if (!shouldRedirectStats(appId))
-			{
-				return;
-			}
-
-			// Clear server-side stats and achievement bits so Steam falls back to
-			// its local offline cache (the target account's data fetched via steamid
-			// override does not overwrite what the real user has locally).
-			body->clear_stats();
-			body->clear_achievement_blocks();
-			body->set_eresult(ERESULT_OK);
-
-			g_pLog->debug
-			(
-				"Achievements: legacy response cleared for app=%u\n",
-				appId
-			);
+			return;
 		}
 	}
 
-	// ── CAPIJob_GetPlayerStats hook ──────────────────────────────────────────
-	// Previously forced ERESULT_NO_CONNECTION for all apps to prevent Steam from
-	// overwriting the local achievement cache with server data. That approach is
-	// replaced by the per-app network-level redirection above, so this function
-	// is now a no-op. The detour in hooks.cpp is intentionally left in place to
-	// avoid out-of-scope changes to patterns.cpp and hooks.cpp wiring.
 	void getPlayerStats(uint32_t& eresult)
 	{
-		// No-op: network hooks redirect stats per-app via steamid substitution.
+		// No-op: the raw network hooks redirect stats per-app; the CAPIJob detour is
+		// kept only for hook-wiring compatibility.
 		(void)eresult;
 	}
 }

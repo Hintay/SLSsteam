@@ -1,5 +1,7 @@
 #include "fakeappid.hpp"
 
+#include "apps.hpp"
+
 #include "../config.hpp"
 
 #include "../sdk/CProtoBufMsgBase.hpp"
@@ -22,7 +24,7 @@ uint32_t FakeAppIds::getFakeAppId(uint32_t appId)
 	{
 		return fakeAppIds[appId];
 	}
-	else if (fakeAppIds.contains(0) && !g_pSteamEngine->getUser(0)->isSubscribed(appId))
+	else if (fakeAppIds.contains(0) && !Apps::isGenuinelySubscribed(appId))
 	{
 		return fakeAppIds[0];
 	}

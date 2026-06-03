@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 struct CAppOwnershipInfo {
@@ -8,7 +9,7 @@ struct CAppOwnershipInfo {
     uint32_t owner;
     int32_t masterSubscriptionAppId;
     uint32_t trialTime;
-    int32_t field5_0x14;
+    int32_t existInPackageNums;
     char region[2];
     char field7_0x1A[2];
     uint32_t purchaseTime;
@@ -34,3 +35,6 @@ struct CAppOwnershipInfo {
     bool field27_0x36;
     bool field28_0x37;
 }; //0x38
+
+static_assert(offsetof(CAppOwnershipInfo, existInPackageNums) == 0x14, "CAppOwnershipInfo::existInPackageNums offset mismatch");
+static_assert(sizeof(CAppOwnershipInfo) == 0x38, "CAppOwnershipInfo size mismatch");

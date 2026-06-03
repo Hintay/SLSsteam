@@ -13,8 +13,69 @@
 #include "fakeappid.hpp"
 #include "package.hpp"
 
+#include <mutex>
+#include <unordered_set>
+
 bool Apps::applistRequested;
 std::map<uint32_t, int> Apps::appIdOwnerOverride;
+
+namespace
+{
+	std::unordered_set<uint32_t> g_genuinelyOwnedAppIds;
+	std::mutex g_genuinelyOwnedMutex;
+}
+
+bool Apps::isGenuinelyOwned(uint32_t appId)
+{
+	std::lock_guard<std::mutex> lock(g_genuinelyOwnedMutex);
+	return g_genuinelyOwnedAppIds.contains(appId);
+}
+
+void Apps::markGenuinelyOwned(uint32_t appId)
+{
+	setGenuinelyOwned(appId, true);
+}
+
+void Apps::unmarkGenuinelyOwned(uint32_t appId)
+{
+	setGenuinelyOwned(appId, false);
+}
+
+void Apps::setGenuinelyOwned(uint32_t appId, bool owned)
+{
+	std::lock_guard<std::mutex> lock(g_genuinelyOwnedMutex);
+	if (owned)
+	{
+		if (g_genuinelyOwnedAppIds.emplace(appId).second)
+		{
+			g_pLog->once("Marking %u as genuinely owned\n", appId);
+		}
+		return;
+	}
+
+	if (g_genuinelyOwnedAppIds.erase(appId))
+	{
+		g_pLog->once("Unmarking %u as genuinely owned\n", appId);
+	}
+}
+
+bool Apps::shouldTreatAsFakeOwned(uint32_t appId)
+{
+	return g_config.isAddedAppId(appId) && !isGenuinelyOwned(appId);
+}
+
+bool Apps::isGenuinelySubscribed(uint32_t appId)
+{
+	// CUser::isSubscribed can observe package-injected ownership. For controlled
+	// apps, trust only the genuine-owned cache populated before spoofing.
+	if (shouldTreatAsFakeOwned(appId))
+	{
+		return false;
+	}
+
+	auto* user = g_pSteamEngine ? g_pSteamEngine->getUser(0) : nullptr;
+	return user && user->isSubscribed(appId);
+}
 
 bool Apps::unlockApp(uint32_t appId, CAppOwnershipInfo* info, uint32_t ownerId)
 {
@@ -160,25 +221,20 @@ bool Apps::shouldDisableCloud(uint32_t appId)
 		return false;
 	}
 
-	// Disable cloud for any app WE fake-own (config AdditionalApps or lua/package
-	// injection). These are not owned server-side, so a cloud sync attempt fails
-	// ("Cloud sync failed" prompt). The plain !isSubscribed check used to cover
-	// them because fake apps weren't really subscribed — but package injection
-	// puts the app in pkg0, so isSubscribed() now returns true for it. isAddedAppId
-	// covers both yaml-added and lua/injected apps (reconcileIntoConfig unions lua
-	// ownedAppIds into addedAppIds).
-	return g_config.isAddedAppId(appId) || !g_pSteamEngine->getUser(0)->isSubscribed(appId);
+	// Disable cloud for fake-owned/non-owned apps. CUser::isSubscribed can see
+	// package-injected ownership, so route through the genuine-owned cache.
+	return !isGenuinelySubscribed(appId);
 }
 
 bool Apps::shouldDisableCDKey(uint32_t appId)
 {
-	return !g_pSteamEngine->getUser(0)->isSubscribed(appId);
+	return !isGenuinelySubscribed(appId);
 }
 
 bool Apps::shouldDisableUpdates(uint32_t appId)
 {
 	//Using AdditionalApps here aswell so users can manually block updates
-	return g_config.isAddedAppId(appId) || !g_pSteamEngine->getUser(0)->isSubscribed(appId);
+	return g_config.isAddedAppId(appId) || !isGenuinelySubscribed(appId);
 }
 
 void Apps::sendGamesPlayed(CMsgClientGamesPlayed* msg)
@@ -195,7 +251,7 @@ void Apps::sendGamesPlayed(CMsgClientGamesPlayed* msg)
 			continue;
 		}
 
-		if(!owned && g_pSteamEngine->getUser(0)->isSubscribed(game.game_id()))
+		if(!owned && isGenuinelySubscribed(game.game_id()))
 		{
 			owned = true;
 		}

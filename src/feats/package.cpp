@@ -3,6 +3,7 @@
 
 #include "../hooks.hpp"
 #include "../config.hpp"
+#include "apps.hpp"
 #include "../lua/LuaLoader.hpp"
 #include "../log.hpp"
 
@@ -149,17 +150,22 @@ static void applyPendingChanges()
     if (!pkg) return;
 
     size_t changed = 0;
+    std::vector<uint32_t> removals;
     std::vector<uint32_t> removed;
     {
         std::lock_guard<std::mutex> lock(g_injectMtx);
         auto* vec = PackageInfo::appIdVec(pkg);
-        for (uint32_t id : LuaLoader::takePendingRemovals())
+        removals = LuaLoader::takePendingRemovals();
+        for (uint32_t id : removals)
             if (findAndFastRemove(vec, id)) { ++changed; removed.push_back(id); }
         for (uint32_t id : LuaLoader::takePendingAdditions()) {
             findAndFastRemove(vec, id);                 // drop any existing copy first (de-dup, matches tryInit)
             if (appendAppIdGrowing(vec, id)) ++changed;
         }
     }
+
+    for (uint32_t id : removals)
+        if (!g_config.isAddedAppId(id)) Apps::unmarkGenuinelyOwned(id);
 
     bool processed = false;
     if (changed) {

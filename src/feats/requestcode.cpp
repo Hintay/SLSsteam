@@ -18,16 +18,14 @@
 #include <mutex>
 #include <vector>
 
-// Manifest request-code interception at the raw packet layer (OST-style; see
-// docs/superpowers/notes/pattern-rederivation-runbook.md §2.B.1).
+// Manifest request-code interception at the raw packet layer; see
+// docs/superpowers/notes/pattern-rederivation-runbook.md §2.B.1.
 //
-// Unlike OST (which lets the request reach the CM and only rewrites the reply),
-// this DROPS the outgoing ContentServerDirectory.GetManifestRequestCode#1 frame
-// so the CM never sees the request, then fabricates the ServiceMethodResponse
-// entirely client-side and injects it through the recv path by borrowing the
-// next incoming packet as a carrier (OST's g_InjectPkt technique). The fabricated
-// response header is derived from the request's OWN header (same connection
-// context) so it is well-formed.
+// Drop the outgoing ContentServerDirectory.GetManifestRequestCode#1 frame so the
+// CM never sees the request, then fabricate the ServiceMethodResponse entirely
+// client-side and inject it through the recv path by borrowing the next incoming
+// packet as a carrier. The fabricated response header is derived from the
+// request's own header (same connection context) so it is well-formed.
 //
 // Hook points: outgoing CWebSocketConnection::BBuildAndAsyncSendFrame (opcode 0x2
 // binary frames), incoming CCMConnection::RecvPkt(CNetPacket*).
