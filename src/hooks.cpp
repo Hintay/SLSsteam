@@ -25,6 +25,7 @@
 #include "feats/misc.hpp"
 #include "feats/fakeappid.hpp"
 #include "feats/package.hpp"
+#include "feats/steamui.hpp"
 #include "feats/requestcode.hpp"
 #include "feats/ticket.hpp"
 
@@ -409,6 +410,20 @@ static void* hkCPackageInfo_GetPackageInfo(void* pThis, uint32_t pkgId, uint64_t
 		Package::setInjectedPackage(ret);
 	}
 	return ret;
+}
+
+__attribute__((hot))
+static void* hkCSteamUI_GetAppByID(void* pController, uint32_t appId, bool bCreate)
+{
+	SteamUI::setController(pController);
+	return Hooks::CSteamUIAppController_GetAppByID.tramp.fn(pController, appId, bCreate);
+}
+
+__attribute__((hot))
+static void hkCUpdateManager_MarkAppChange(void* pSource, uint32_t appId, uint32_t flags)
+{
+	SteamUI::setAppChangeSource(pSource);
+	Hooks::CUpdateManager_MarkAppChange.tramp.fn(pSource, appId, flags);
 }
 
 static bool hkClientAppManager_BCanRemotePlayTogether(void* pClientAppManager, uint32_t appId)
@@ -1050,6 +1065,11 @@ namespace Hooks
 	CUtlMemory_Grow_t              oCUtlMemoryGrow               = nullptr;
 	DetourHook<CPackageInfo_GetPackageInfo_t> CPackageInfo_GetPackageInfo;
 
+	CSteamUI_GetAppByID_t          oGetAppByID    = nullptr;
+	CUpdateManager_MarkAppChange_t oMarkAppChange = nullptr;
+	DetourHook<CSteamUI_GetAppByID_detour_t>          CSteamUIAppController_GetAppByID;
+	DetourHook<CUpdateManager_MarkAppChange_detour_t> CUpdateManager_MarkAppChange;
+
 	DetourHook<IClientAppManager_BCanRemotePlayTogether_t> IClientAppManager_BCanRemotePlayTogether;
 
 	DetourHook<IClientUser_BLoggedOn_t> IClientUser_BLoggedOn;
@@ -1091,6 +1111,9 @@ bool Hooks::setup()
 	oGetPackageInfo               = reinterpret_cast<GetPackageInfo_t>(Patterns::CPackageInfo::GetPackageInfo.address);
 	oCUtlMemoryGrow               = reinterpret_cast<CUtlMemory_Grow_t>(Patterns::CUtlMemory::Grow.address);
 
+	oGetAppByID    = reinterpret_cast<CSteamUI_GetAppByID_t>(Patterns::CSteamUIAppController::GetAppByID.address);
+	oMarkAppChange = reinterpret_cast<CUpdateManager_MarkAppChange_t>(Patterns::CUpdateManager::MarkAppChange.address);
+
 	bool succeeded =
 		TraceIPC.setup(Patterns::TraceIPC, &hkTraceIPC)
 
@@ -1109,6 +1132,9 @@ bool Hooks::setup()
 		&& CUser_GetSubscribedApps.setup(Patterns::CUser::GetSubscribedApps, &hkUser_GetSubscribedApps)
 
 		&& CPackageInfo_GetPackageInfo.setup(Patterns::CPackageInfo::GetPackageInfo, &hkCPackageInfo_GetPackageInfo)
+
+		&& CSteamUIAppController_GetAppByID.setup(Patterns::CSteamUIAppController::GetAppByID, &hkCSteamUI_GetAppByID)
+		&& CUpdateManager_MarkAppChange.setup(Patterns::CUpdateManager::MarkAppChange, &hkCUpdateManager_MarkAppChange)
 
 		&& CSteamEngine_Init.setup(Patterns::CSteamEngine::Init, &hkSteamEngine_Init)
 		&& CSteamEngine_SetAppIdForCurrentPipe.setup(Patterns::CSteamEngine::SetAppIdForCurrentPipe, &hkSteamEngine_SetAppIdForCurrentPipe)
@@ -1167,6 +1193,9 @@ void Hooks::place()
 	CUser_GetSubscribedApps.place();
 	CPackageInfo_GetPackageInfo.place();
 
+	CSteamUIAppController_GetAppByID.place();
+	CUpdateManager_MarkAppChange.place();
+
 	IClientAppManager_BCanRemotePlayTogether.place();
 
 	IClientApps_RunIPCFrame.place();
@@ -1210,6 +1239,9 @@ void Hooks::remove()
 	CUser_CheckAppOwnership.remove();
 	CUser_GetSubscribedApps.remove();
 	CPackageInfo_GetPackageInfo.remove();
+
+	CSteamUIAppController_GetAppByID.remove();
+	CUpdateManager_MarkAppChange.remove();
 
 	IClientAppManager_BCanRemotePlayTogether.remove();
 

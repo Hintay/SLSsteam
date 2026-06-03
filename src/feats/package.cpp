@@ -1,4 +1,5 @@
 #include "package.hpp"
+#include "steamui.hpp"
 
 #include "../hooks.hpp"
 #include "../config.hpp"
@@ -7,6 +8,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <vector>
 
 namespace {
     std::atomic<bool>  g_active{false};
@@ -117,7 +119,9 @@ void notifyLicenseChanged()
     std::lock_guard<std::mutex> lock(g_injectMtx);
     auto* vec = PackageInfo::appIdVec(pkg);
     size_t changed = 0;
-    for (uint32_t id : LuaLoader::takePendingRemovals())  if (findAndFastRemove(vec, id)) ++changed;
+    std::vector<uint32_t> removed;
+    for (uint32_t id : LuaLoader::takePendingRemovals())
+        if (findAndFastRemove(vec, id)) { ++changed; removed.push_back(id); }
     for (uint32_t id : LuaLoader::takePendingAdditions()) {
         findAndFastRemove(vec, id);                 // drop any existing copy first (de-dup, matches tryInit)
         if (appendAppIdGrowing(vec, id)) ++changed;
@@ -127,6 +131,7 @@ void notifyLicenseChanged()
             g_pLog->warn("Package: markAndProcess skipped on live change (deps not ready)\n");
         g_pLog->info("Package: live license change applied (%zu)\n", changed);
     }
+    for (uint32_t id : removed) SteamUI::removeAppAndSendChange(id);
 }
 
 } // namespace Package
