@@ -68,6 +68,8 @@ namespace Patterns
 		extern Pattern_t GetSubscribedApps;
 		extern Pattern_t PostCallback;
 		extern Pattern_t UpdateAppOwnershipTicket;
+		extern Pattern_t MarkLicenseAsChanged;
+		extern Pattern_t ProcessPendingLicenseUpdates;
 	}
 
 	namespace IClientAppManager
@@ -114,6 +116,10 @@ namespace Patterns
 		extern Pattern_t Offset_GetPipeIndex;
 	}
 
+	namespace CPackageInfo
+	{
+		extern Pattern_t GetPackageInfo;
+	}
 
 	//steamui.so
 	namespace ISteamMatchmakingPingResponse

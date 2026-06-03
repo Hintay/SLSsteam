@@ -192,6 +192,18 @@ namespace Patterns
 			"E8 ? ? ? ? E9 ? ? ? ? ? ? ? ? ? ? 8D 45 ? 89 45 ? EB",
 			SigFollowMode::Relative
 		};
+		Pattern_t MarkLicenseAsChanged
+		{
+			"CUser::MarkLicenseAsChanged",
+			"55 57 56 53 E8 ? ? ? ? 81 C3 ? ? ? ? 83 EC 2C 8B 74 24 40 8B 44 24 48 8B BE 18 1B 00 00 88 44 24 1C 8D 86 E8 1A 00 00",
+			MemHlp::SigFollowMode::None
+		};
+		Pattern_t ProcessPendingLicenseUpdates
+		{
+			"CUser::ProcessPendingLicenseUpdates",
+			"55 E8 ? ? ? ? 81 C5 ? ? ? ? 57 56 53 83 EC 0C 8B 7C 24 20 8B B7 D4 1B 00 00 83 EE 01 79 0F EB 5D",
+			MemHlp::SigFollowMode::None
+		};
 	}
 
 	namespace IClientAppManager
@@ -322,6 +334,16 @@ namespace Patterns
 			"IClientUtils::m_PipeIndex",
 			"8B 91 ? ? ? ? 83 F8 FF 74 ? 8B 89 ? ? ? ? EB ? ? ? ? 8B 00 83 F8 FF 74 ? 8D 04 ? 8D 04 ? 3B 50",
 			SigFollowMode::None,
+		};
+	}
+
+	namespace CPackageInfo
+	{
+		Pattern_t GetPackageInfo
+		{
+			"CPackageInfo::GetPackageInfo",
+			"E8 ? ? ? ? 05 ? ? ? ? 55 89 E5 57 56 53 83 EC 3C 8B 55 14 8B 75 0C 89 45 CC 8B 45 10 89 55 DC 89 45 D8 8B 45 08",
+			MemHlp::SigFollowMode::None
 		};
 	}
 
