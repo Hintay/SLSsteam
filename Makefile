@@ -51,6 +51,12 @@ bin/pkg_smoke: tools/pkg_smoke/smoke.cpp
 
 pkg_smoke: bin/pkg_smoke
 
+bin/netpacket_smoke: tools/netpacket_smoke/smoke.cpp src/sdk/CNetPacket.hpp
+	@mkdir -p bin
+	g++ -std=c++20 -m32 -O0 -g -o bin/netpacket_smoke tools/netpacket_smoke/smoke.cpp
+
+netpacket_smoke: bin/netpacket_smoke
+
 audit-libs: bin/SLSsteam.so bin/library-inject.so tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber
 
 bin/SLSsteam.so: $(objs) $(libs)
@@ -120,5 +126,5 @@ build: audit-libs
 rebuild: clean build
 all: clean build zips
 
-.PHONY: all build clean rebuild zips lua_smoke pkg_smoke
+.PHONY: all build clean rebuild zips lua_smoke pkg_smoke netpacket_smoke
 .NOTPARALLEL: clean rebuild zips
