@@ -1,11 +1,17 @@
 #include "package.hpp"
 
+#include "../hooks.hpp"
+#include "../lua/LuaLoader.hpp"
 #include "../log.hpp"
 
 #include <atomic>
+#include <mutex>
 
 namespace {
-    std::atomic<bool> g_active{false};
+    std::atomic<bool>  g_active{false};
+    std::atomic<void*> g_pkg{nullptr};
+    std::atomic<void*> g_cuser{nullptr};
+    std::mutex         g_injectMtx;   // serialize notify vs init (FileWatcher thread)
 }
 
 namespace Package {
@@ -35,10 +41,60 @@ bool findAndFastRemove(CUtlVector<uint32_t>* vec, uint32_t appId)
     return false;
 }
 
-// Stubs filled in Task 5.
-void setInjectedPackage(void*) {}
-void setCUser(void*) {}
-void notifyLicenseChanged() {}
-void tryInitFakeLicenseOnce() {}
+void setInjectedPackage(void* pkg) { g_pkg.store(pkg, std::memory_order_release); }
+void setCUser(void* cuser)         { g_cuser.store(cuser, std::memory_order_release); }
+
+// Mark package 0 changed + process pending license updates so Steam re-evaluates
+// ownership without a restart. Caller holds g_injectMtx. Returns false if deps not ready.
+static bool markAndProcess()
+{
+    void* cuser = g_cuser.load(std::memory_order_acquire);
+    if (!cuser || !Hooks::oMarkLicenseAsChanged || !Hooks::oProcessPendingLicenseUpdates)
+        return false;
+    Hooks::oMarkLicenseAsChanged(cuser, 0 /*pkgId*/, 1 /*bChanged*/);
+    Hooks::oProcessPendingLicenseUpdates(cuser);
+    return true;
+}
+
+void tryInitFakeLicenseOnce()
+{
+    if (g_active.load(std::memory_order_acquire)) return;
+    void* pkg = g_pkg.load(std::memory_order_acquire);
+    if (!pkg || !g_cuser.load(std::memory_order_acquire)) return;
+    if (PackageInfo::status(pkg) != 0) return; // not Available
+
+    std::lock_guard<std::mutex> lock(g_injectMtx);
+    if (g_active.load(std::memory_order_acquire)) return; // double-checked
+
+    auto* vec = PackageInfo::appIdVec(pkg);
+    const auto ids = LuaLoader::getAllDepotIds();
+    size_t added = 0, dropped = 0;
+    for (uint32_t id : ids) {
+        findAndFastRemove(vec, id);                  // drop any existing copy (de-dup)
+        if (appendAppIdInPlace(vec, id)) ++added; else ++dropped;
+    }
+    if (dropped) g_pLog->warn("Package: %zu ids dropped — pkg0 AppIdVec out of spare capacity\n", dropped);
+    g_active.store(true, std::memory_order_release);
+    if (!markAndProcess())
+        g_pLog->warn("Package: markAndProcess skipped at init (deps not ready)\n");
+    g_pLog->once("Package: injected %zu appIds into pkg0, license re-evaluated\n", added);
+}
+
+void notifyLicenseChanged()
+{
+    void* pkg = g_pkg.load(std::memory_order_acquire);
+    if (!pkg || !g_active.load(std::memory_order_acquire)) { tryInitFakeLicenseOnce(); return; }
+
+    std::lock_guard<std::mutex> lock(g_injectMtx);
+    auto* vec = PackageInfo::appIdVec(pkg);
+    size_t changed = 0;
+    for (uint32_t id : LuaLoader::takePendingRemovals())  if (findAndFastRemove(vec, id)) ++changed;
+    for (uint32_t id : LuaLoader::takePendingAdditions()) if (appendAppIdInPlace(vec, id)) ++changed;
+    if (changed) {
+        if (!markAndProcess())
+            g_pLog->warn("Package: markAndProcess skipped on live change (deps not ready)\n");
+        g_pLog->info("Package: live license change applied (%zu)\n", changed);
+    }
+}
 
 } // namespace Package

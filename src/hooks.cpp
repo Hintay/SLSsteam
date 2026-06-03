@@ -28,6 +28,8 @@
 #include "feats/requestcode.hpp"
 #include "feats/ticket.hpp"
 
+#include "lua/LuaLoader.hpp"
+
 #include "sdk/PackageInfo.hpp"
 
 #include "libmem/libmem.h"
@@ -352,6 +354,7 @@ static uint32_t hkUser_CheckAppOwnership(void* pClientUser, uint32_t appId, CApp
 {
 	// Capture CUser* once; setCUser is idempotent/atomic so calling every invocation is safe.
 	Package::setCUser(pClientUser);
+	Package::tryInitFakeLicenseOnce();
 
 	const uint32_t ret = Hooks::CUser_CheckAppOwnership.tramp.fn(pClientUser, appId, pOwnershipInfo);
 
@@ -1125,6 +1128,8 @@ bool Hooks::setup()
 		&& IClientUser_RequiresLegacyCDKey.setup(Patterns::IClientUser::RequiresLegacyCDKey, hkClientUser_RequiresLegacyCDKey)
 
 		&& ISteamMatchmakingPingResponse_ServerResponded.setup(Patterns::ISteamMatchmakingPingResponse::ServerResponded, hkSteamMatchmakingPingResponse_ServerResponded);
+
+	LuaLoader::setOnDepotsChanged(&Package::notifyLicenseChanged);
 
 	Hooks::place();
 	//This is unnecessary but I'll keep this for now in case I wanna improve error checks
