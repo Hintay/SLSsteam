@@ -39,5 +39,36 @@ int main() {
     assert(PackageInfo::appIdVec(buf)->m_Size == 3);
     assert(PackageInfo::appIdVec(buf)->m_Memory.m_pMemory[2] == 70);
     printf("pkg_smoke: PackageInfo accessors OK\n");
+
+    // ── Task 2: append-into-spare + find-and-fast-remove ──
+    auto appendInPlace = [](CUtlVector<uint32_t>* v, uint32_t id) -> bool {
+        if (v->m_Size < 0) return false;
+        if ((uint32_t)v->m_Size >= v->m_Memory.m_nAllocationCount) return false;
+        v->m_Memory.m_pMemory[v->m_Size] = id;
+        v->m_Size += 1;
+        return true;
+    };
+    auto fastRemove = [](CUtlVector<uint32_t>* v, uint32_t id) -> bool {
+        for (int32_t i = 0; i < v->m_Size; ++i) {
+            if (v->m_Memory.m_pMemory[i] == id) {
+                v->m_Memory.m_pMemory[i] = v->m_Memory.m_pMemory[v->m_Size - 1];
+                v->m_Size -= 1;
+                return true;
+            }
+        }
+        return false;
+    };
+    uint32_t st2[4] = {5, 7, 70, 0};
+    CUtlVector<uint32_t> v2{}; v2.m_Memory.m_pMemory = st2;
+    v2.m_Memory.m_nAllocationCount = 4; v2.m_Size = 3;
+    assert(appendInPlace(&v2, 1139900) == true);   // uses the 1 spare slot
+    assert(v2.m_Size == 4 && st2[3] == 1139900);
+    assert(appendInPlace(&v2, 999) == false);       // full -> no realloc
+    assert(v2.m_Size == 4);
+    assert(fastRemove(&v2, 7) == true);             // remove middle; last fills it
+    assert(v2.m_Size == 3 && st2[1] == 1139900);
+    assert(fastRemove(&v2, 424242) == false);       // absent
+    printf("pkg_smoke: append/remove OK\n");
+
     return 0;
 }
