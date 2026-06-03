@@ -1075,8 +1075,6 @@ namespace Hooks
 	CUtlMemory_Grow_t              oCUtlMemoryGrow               = nullptr;
 	DetourHook<CPackageInfo_GetPackageInfo_t> CPackageInfo_GetPackageInfo;
 
-	CSteamUI_GetAppByID_t          oGetAppByID    = nullptr;
-	CUpdateManager_MarkAppChange_t oMarkAppChange = nullptr;
 	DetourHook<CSteamUI_GetAppByID_detour_t>          CSteamUIAppController_GetAppByID;
 	DetourHook<CUpdateManager_MarkAppChange_detour_t> CUpdateManager_MarkAppChange;
 	DetourHook<CSteamUI_FillInAppOverview_t>          CSteamUIAppController_FillInAppOverview;
@@ -1121,9 +1119,6 @@ bool Hooks::setup()
 	oProcessPendingLicenseUpdates = reinterpret_cast<ProcessPendingLicenseUpdates_t>(Patterns::CUser::ProcessPendingLicenseUpdates.address);
 	oGetPackageInfo               = reinterpret_cast<GetPackageInfo_t>(Patterns::CPackageInfo::GetPackageInfo.address);
 	oCUtlMemoryGrow               = reinterpret_cast<CUtlMemory_Grow_t>(Patterns::CUtlMemory::Grow.address);
-
-	oGetAppByID    = reinterpret_cast<CSteamUI_GetAppByID_t>(Patterns::CSteamUIAppController::GetAppByID.address);
-	oMarkAppChange = reinterpret_cast<CUpdateManager_MarkAppChange_t>(Patterns::CUpdateManager::MarkAppChange.address);
 
 	bool succeeded =
 		TraceIPC.setup(Patterns::TraceIPC, &hkTraceIPC)

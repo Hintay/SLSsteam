@@ -124,11 +124,6 @@ namespace Hooks
 	extern DetourHook<CPackageInfo_GetPackageInfo_t> CPackageInfo_GetPackageInfo;
 
 	// steamui.so — CSteamUIAppController::GetAppByID and CUpdateManager::MarkAppChange
-	typedef void* (*CSteamUI_GetAppByID_t)(void* pController, uint32_t appId, bool bCreate);
-	typedef void  (*CUpdateManager_MarkAppChange_t)(void* pSource, uint32_t appId, uint32_t flags);
-	extern CSteamUI_GetAppByID_t          oGetAppByID;
-	extern CUpdateManager_MarkAppChange_t oMarkAppChange;
-
 	typedef void* (*CSteamUI_GetAppByID_detour_t)(void*, uint32_t, bool);
 	typedef void  (*CUpdateManager_MarkAppChange_detour_t)(void*, uint32_t, uint32_t);
 	extern DetourHook<CSteamUI_GetAppByID_detour_t>          CSteamUIAppController_GetAppByID;

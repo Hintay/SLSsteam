@@ -52,8 +52,9 @@ bool findAndFastRemove(CUtlVector<uint32_t>* vec, uint32_t appId)
 // Caller holds g_injectMtx. Returns false only if grow is unavailable or still fails.
 static bool appendAppIdGrowing(CUtlVector<uint32_t>* vec, uint32_t appId)
 {
+    if (!vec) return false;
     if (appendAppIdInPlace(vec, appId)) return true;   // spare slot existed
-    if (!vec || !Hooks::oCUtlMemoryGrow) return false;
+    if (!Hooks::oCUtlMemoryGrow) return false;
     // NOTE: Grow triggers a realloc that frees the old m_pMemory; Steam threads
     // reading AppIdVec lock-free during this window risk a use-after-free — an
     // escalation over the §8 in-place-write race (which only risks a stale value).
@@ -126,12 +127,14 @@ void notifyLicenseChanged()
         findAndFastRemove(vec, id);                 // drop any existing copy first (de-dup, matches tryInit)
         if (appendAppIdGrowing(vec, id)) ++changed;
     }
+    bool processed = false;
     if (changed) {
-        if (!markAndProcess())
-            g_pLog->warn("Package: markAndProcess skipped on live change (deps not ready)\n");
+        processed = markAndProcess();
+        if (!processed) g_pLog->warn("Package: markAndProcess skipped on live change (deps not ready)\n");
         g_pLog->info("Package: live license change applied (%zu)\n", changed);
     }
-    for (uint32_t id : removed) SteamUI::removeAppAndSendChange(id);
+    if (processed)
+        for (uint32_t id : removed) SteamUI::removeAppAndSendChange(id);
 }
 
 } // namespace Package

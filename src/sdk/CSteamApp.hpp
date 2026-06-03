@@ -20,8 +20,8 @@ namespace CSteamApp {
     inline void setPurchaseTime(void* app, uint32_t t) {
         *reinterpret_cast<uint32_t*>(reinterpret_cast<char*>(app) + kPurchaseOff) = t;
     }
-}
 
-// EAppChangeFlags::AddedOrCreated — the change flag Steam itself uses on app add
-// (proven 2026-06-03). Used by SteamUI::removeAppAndSendChange.
-static constexpr uint32_t kEAppChange_AddedOrCreated = 0x0001;
+    // EAppChangeFlags::AddedOrCreated — the change flag Steam itself uses on app add
+    // (proven 2026-06-03). Used by SteamUI::removeAppAndSendChange.
+    static constexpr uint32_t kEAppChange_AddedOrCreated = 0x0001;
+}
