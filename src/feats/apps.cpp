@@ -160,7 +160,14 @@ bool Apps::shouldDisableCloud(uint32_t appId)
 		return false;
 	}
 
-	return !g_pSteamEngine->getUser(0)->isSubscribed(appId);
+	// Disable cloud for any app WE fake-own (config AdditionalApps or lua/package
+	// injection). These are not owned server-side, so a cloud sync attempt fails
+	// ("Cloud sync failed" prompt). The plain !isSubscribed check used to cover
+	// them because fake apps weren't really subscribed — but package injection
+	// puts the app in pkg0, so isSubscribed() now returns true for it. isAddedAppId
+	// covers both yaml-added and lua/injected apps (reconcileIntoConfig unions lua
+	// ownedAppIds into addedAppIds).
+	return g_config.isAddedAppId(appId) || !g_pSteamEngine->getUser(0)->isSubscribed(appId);
 }
 
 bool Apps::shouldDisableCDKey(uint32_t appId)

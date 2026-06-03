@@ -355,7 +355,7 @@ static uint32_t hkUser_CheckAppOwnership(void* pClientUser, uint32_t appId, CApp
 {
 	// Capture CUser* once; setCUser is idempotent/atomic so calling every invocation is safe.
 	Package::setCUser(pClientUser);
-	Package::tryInitFakeLicenseOnce();
+	Package::pumpOnSteamThread();   // initial inject + drain lua hot-reload changes, on this Steam thread (§8)
 
 	const uint32_t ret = Hooks::CUser_CheckAppOwnership.tramp.fn(pClientUser, appId, pOwnershipInfo);
 

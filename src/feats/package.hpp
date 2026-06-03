@@ -22,10 +22,17 @@ namespace Package {
     void setInjectedPackage(void* pkg);
     void setCUser(void* cuser);
 
-    // Spec A onDepotsChanged callback target (registered in Hooks::setup).
+    // Spec A onDepotsChanged callback target (lua FileWatcher thread). Only flags a
+    // pending change; the real pkg0 mutation runs on a Steam thread (§8).
     void notifyLicenseChanged();
 
     // One-shot: inject getAllDepotIds() into pkg0 + Mark/Process. Safe to call
     // repeatedly; only runs once when pkg0+CUser captured and Status==Available.
     void tryInitFakeLicenseOnce();
+
+    // Called from a Steam thread (hkUser_CheckAppOwnership). Runs the one-shot
+    // initial injection, then drains any pending lua hot-reload changes flagged by
+    // notifyLicenseChanged — keeping ALL Steam-table mutation on the Steam thread
+    // (§8: doing it on the foreign FileWatcher thread crashes Steam).
+    void pumpOnSteamThread();
 }
