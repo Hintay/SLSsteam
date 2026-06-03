@@ -32,6 +32,7 @@
 #include "lua/LuaLoader.hpp"
 
 #include "sdk/AppData.hpp"
+#include "sdk/CNetPacket.hpp"
 #include "sdk/PackageInfo.hpp"
 
 #include "libmem/libmem.h"
@@ -259,7 +260,6 @@ static void hkProtoBufMsgBase_InitFromPacket(CProtoBufMsgBase* pMsg, void* pSrc)
 
 	Achievements::recvMessage(pMsg);
 	Misc::recvMsg(pMsg);
-	RequestCode::recvMsg(pMsg);
 	Ticket::recvMsg(pMsg);
 }
 
@@ -268,12 +268,29 @@ static uint32_t hkProtoBufMsgBase_Send(CProtoBufMsgBase* pMsg)
 	Achievements::sendMessage(pMsg);
 	Apps::sendMsg(pMsg);
 	FakeAppIds::sendMsg(pMsg);
-	RequestCode::sendMsg(pMsg);
 
 	const uint32_t ret = Hooks::CProtoBufMsgBase_Send.tramp.fn(pMsg);
 	g_pLog->debug("Sending ProtoBufMsg of type %u with type %s\n", pMsg->type, MemHlp::getTypeName(pMsg));
 
 	return ret;
+}
+
+__attribute__((hot))
+static bool hkCWebSocketConnection_BBuildAndAsyncSendFrame(void* pThis, int opcode, uint8_t* pubData, uint32_t cubData)
+{
+	// opcode 0x8 == WebSocket binary frame (the raw Steam packet payload).
+	if (opcode == 0x8)
+		RequestCode::onSendFrame(pubData, cubData);
+	return Hooks::CWebSocketConnection_BBuildAndAsyncSendFrame.tramp.fn(pThis, opcode, pubData, cubData);
+}
+
+__attribute__((hot))
+static void* hkCCMConnection_RecvPkt(void* pThis, CNetPacket* pPacket)
+{
+	// Splice the manifest request code into the matching ServiceMethod response
+	// BEFORE the original processes it (rewrites pPacket->m_pubData/m_cubData).
+	RequestCode::onRecvPacket(pPacket);
+	return Hooks::CCMConnection_RecvPkt.tramp.fn(pThis, pPacket);
 }
 
 static void hkSteamEngine_Init(void* pSteamEngine)
@@ -1098,6 +1115,9 @@ namespace Hooks
 	DetourHook<CProtoBufMsgBase_InitFromPacket_t> CProtoBufMsgBase_InitFromPacket;
 	DetourHook<CProtoBufMsgBase_Send_t> CProtoBufMsgBase_Send;
 
+	DetourHook<CWebSocketConnection_BBuildAndAsyncSendFrame_t> CWebSocketConnection_BBuildAndAsyncSendFrame;
+	DetourHook<CCMConnection_RecvPkt_t> CCMConnection_RecvPkt;
+
 	DetourHook<CSteamMatchmakingServers_GetServerDetails_t> CSteamMatchmakingServers_GetServerDetails;
 	DetourHook<CSteamMatchmakingServers_RequestInternetServerList_t> CSteamMatchmakingServers_RequestInternetServerList;
 
@@ -1167,6 +1187,8 @@ bool Hooks::setup()
 
 		&& CProtoBufMsgBase_InitFromPacket.setup(Patterns::CProtoBufMsgBase::InitFromPacket, &hkProtoBufMsgBase_InitFromPacket)
 		&& CProtoBufMsgBase_Send.setup(Patterns::CProtoBufMsgBase::Send, &hkProtoBufMsgBase_Send)
+		&& CWebSocketConnection_BBuildAndAsyncSendFrame.setup(Patterns::CWebSocketConnection::BBuildAndAsyncSendFrame, &hkCWebSocketConnection_BBuildAndAsyncSendFrame)
+		&& CCMConnection_RecvPkt.setup(Patterns::CCMConnection::RecvPkt, &hkCCMConnection_RecvPkt)
 
 		&& CSteamMatchmakingServers_GetServerDetails.setup(Patterns::CSteamMatchmakingServers::GetServerDetails, &hkSteamMatchmakingServers_GetServerDetails)
 		&& CSteamMatchmakingServers_RequestInternetServerList.setup(Patterns::CSteamMatchmakingServers::RequestInternetServerList, &hkSteamMatchmakingServers_RequestInternetServerList)
@@ -1227,6 +1249,8 @@ void Hooks::place()
 
 	CProtoBufMsgBase_InitFromPacket.place();
 	CProtoBufMsgBase_Send.place();
+	CWebSocketConnection_BBuildAndAsyncSendFrame.place();
+	CCMConnection_RecvPkt.place();
 
 	CSteamEngine_Init.place();
 	CSteamEngine_SetAppIdForCurrentPipe.place();
@@ -1276,6 +1300,8 @@ void Hooks::remove()
 
 	CProtoBufMsgBase_InitFromPacket.remove();
 	CProtoBufMsgBase_Send.remove();
+	CWebSocketConnection_BBuildAndAsyncSendFrame.remove();
+	CCMConnection_RecvPkt.remove();
 
 	CSteamEngine_Init.remove();
 	CSteamEngine_SetAppIdForCurrentPipe.remove();

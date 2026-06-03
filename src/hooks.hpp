@@ -10,6 +10,7 @@ class CAppOwnershipInfo;
 class CProtoBufMsgBase;
 
 struct gameserverdetails_t;
+struct CNetPacket;
 
 struct Pattern_t;
 
@@ -145,6 +146,13 @@ namespace Hooks
 
 	extern DetourHook<CProtoBufMsgBase_InitFromPacket_t> CProtoBufMsgBase_InitFromPacket;
 	extern DetourHook<CProtoBufMsgBase_Send_t> CProtoBufMsgBase_Send;
+
+	// Raw packet layer — manifest request-code interception (see requestcode.cpp).
+	// (CNetPacket forward-declared at global scope above == ::CNetPacket in sdk/CNetPacket.hpp.)
+	typedef bool  (*CWebSocketConnection_BBuildAndAsyncSendFrame_t)(void*, int, uint8_t*, uint32_t);
+	typedef void* (*CCMConnection_RecvPkt_t)(void*, CNetPacket*);
+	extern DetourHook<CWebSocketConnection_BBuildAndAsyncSendFrame_t> CWebSocketConnection_BBuildAndAsyncSendFrame;
+	extern DetourHook<CCMConnection_RecvPkt_t> CCMConnection_RecvPkt;
 
 	extern DetourHook<CSteamMatchmakingServers_GetServerDetails_t> CSteamMatchmakingServers_GetServerDetails;
 	extern DetourHook<CSteamMatchmakingServers_RequestInternetServerList_t> CSteamMatchmakingServers_RequestInternetServerList;
