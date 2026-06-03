@@ -347,6 +347,22 @@ namespace Patterns
 		};
 	}
 
+	namespace CAppInfoCache
+	{
+		Pattern_t GetOrAddAppData
+		{
+			"CAppInfoCache::GetOrAddAppData",
+			// 3-arg cdecl entry (pCache, appId, createOrLookupFlag). Same PIC-prologue
+			// shape as GetPackageInfo (E8 thunk; ADD GOT; EBP frame; spill args). The
+			// distinctive tail — sub esp,0x2c; mov esi,[ebp+0xc] (appId); mov edi,[ebp+0x10]
+			// (flag); mov eax,[eax+0x8b0] — pins it to a single site (RE-verified unique).
+			// The PIC thunk call and the ADD GOT displacement are wildcarded (build-relative).
+			// See docs/superpowers/notes/ost-linux-appinfo-cache-hooks.md.
+			"E8 ? ? ? ? 05 ? ? ? ? 55 89 E5 57 56 53 83 EC 2C 8B 75 0C 8B 7D 10 89 45 D0 8B 80 B0 08 00 00",
+			MemHlp::SigFollowMode::None
+		};
+	}
+
 	namespace CUtlMemory
 	{
 		// Anchor on a unique call-site; SigFollowMode::Relative follows the E8 to Grow.

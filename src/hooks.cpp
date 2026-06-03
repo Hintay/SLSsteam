@@ -31,6 +31,7 @@
 
 #include "lua/LuaLoader.hpp"
 
+#include "sdk/AppData.hpp"
 #include "sdk/PackageInfo.hpp"
 
 #include "libmem/libmem.h"
@@ -410,6 +411,28 @@ static void* hkCPackageInfo_GetPackageInfo(void* pThis, uint32_t pkgId, uint64_t
 		Package::setInjectedPackage(ret);
 	}
 	return ret;
+}
+
+__attribute__((hot))
+static void* hkCAppInfoCache_GetOrAddAppData(void* pCache, uint32_t appId, uint8_t bCreateOrLookupFlag)
+{
+	void* pData = Hooks::CAppInfoCache_GetOrAddAppData.tramp.fn(pCache, appId, bCreateOrLookupFlag);
+	// When package injection puts a fake-owned app into pkg0, Steam never PICS-resolves
+	// its appinfo, so the CAppData SHA1 stays empty. ProcessPendingLicenseUpdates then
+	// chokes on that unresolved entry during live license re-eval → sporadic SIGSEGV
+	// (proven Task 8). Mark it as a PICS known-unknown (bSkipFlag=1), exactly like
+	// Steam's own unknown-app path, so re-eval treats it as resolved-but-empty instead
+	// of waiting forever. Guard order is cost-ordered: the cheap atomic gate
+	// (packageInjection, default-off) short-circuits before the per-call set copy in
+	// isAddedAppId; isUnresolvedAppInfo filters out already-resolved apps first.
+	if (pData
+		&& g_config.packageInjection.get()
+		&& AppData::isUnresolvedAppInfo(pData)
+		&& g_config.isAddedAppId(appId))
+	{
+		AppData::setSkipFlag(pData);
+	}
+	return pData;
 }
 
 __attribute__((hot))
@@ -1073,6 +1096,7 @@ namespace Hooks
 	ProcessPendingLicenseUpdates_t oProcessPendingLicenseUpdates = nullptr;
 	CUtlMemory_Grow_t              oCUtlMemoryGrow               = nullptr;
 	DetourHook<CPackageInfo_GetPackageInfo_t> CPackageInfo_GetPackageInfo;
+	DetourHook<CAppInfoCache_GetOrAddAppData_t> CAppInfoCache_GetOrAddAppData;
 
 	DetourHook<CSteamUI_GetAppByID_detour_t>          CSteamUIAppController_GetAppByID;
 	DetourHook<CUpdateManager_MarkAppChange_detour_t> CUpdateManager_MarkAppChange;
@@ -1136,6 +1160,7 @@ bool Hooks::setup()
 		&& CUser_GetSubscribedApps.setup(Patterns::CUser::GetSubscribedApps, &hkUser_GetSubscribedApps)
 
 		&& CPackageInfo_GetPackageInfo.setup(Patterns::CPackageInfo::GetPackageInfo, &hkCPackageInfo_GetPackageInfo)
+		&& CAppInfoCache_GetOrAddAppData.setup(Patterns::CAppInfoCache::GetOrAddAppData, &hkCAppInfoCache_GetOrAddAppData)
 
 		&& CSteamUIAppController_GetAppByID.setup(Patterns::CSteamUIAppController::GetAppByID, &hkCSteamUI_GetAppByID)
 		&& CUpdateManager_MarkAppChange.setup(Patterns::CUpdateManager::MarkAppChange, &hkCUpdateManager_MarkAppChange)
@@ -1197,6 +1222,7 @@ void Hooks::place()
 	CUser_CheckAppOwnership.place();
 	CUser_GetSubscribedApps.place();
 	CPackageInfo_GetPackageInfo.place();
+	CAppInfoCache_GetOrAddAppData.place();
 
 	CSteamUIAppController_GetAppByID.place();
 	CUpdateManager_MarkAppChange.place();
@@ -1245,6 +1271,7 @@ void Hooks::remove()
 	CUser_CheckAppOwnership.remove();
 	CUser_GetSubscribedApps.remove();
 	CPackageInfo_GetPackageInfo.remove();
+	CAppInfoCache_GetOrAddAppData.remove();
 
 	CSteamUIAppController_GetAppByID.remove();
 	CUpdateManager_MarkAppChange.remove();

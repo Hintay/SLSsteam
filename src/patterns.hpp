@@ -121,6 +121,11 @@ namespace Patterns
 		extern Pattern_t GetPackageInfo;
 	}
 
+	namespace CAppInfoCache
+	{
+		extern Pattern_t GetOrAddAppData;   // 3-arg cdecl appinfo lookup/insert
+	}
+
 	namespace CUtlMemory
 	{
 		extern Pattern_t Grow;   // CUtlMemory<uint32>::Grow(mem*, int) via Relative anchor
