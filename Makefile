@@ -45,6 +45,12 @@ bin/lua_smoke: tools/lua_smoke/smoke.cpp
 
 lua_smoke: bin/lua_smoke
 
+bin/pkg_smoke: tools/pkg_smoke/smoke.cpp
+	@mkdir -p bin
+	g++ -std=c++17 -o bin/pkg_smoke tools/pkg_smoke/smoke.cpp
+
+pkg_smoke: bin/pkg_smoke
+
 audit-libs: bin/SLSsteam.so bin/library-inject.so tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber
 
 bin/SLSsteam.so: $(objs) $(libs)
@@ -114,5 +120,5 @@ build: audit-libs
 rebuild: clean build
 all: clean build zips
 
-.PHONY: all build clean rebuild zips
+.PHONY: all build clean rebuild zips lua_smoke pkg_smoke
 .NOTPARALLEL: clean rebuild zips

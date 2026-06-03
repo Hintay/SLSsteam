@@ -1,6 +1,7 @@
 #include "package.hpp"
 
 #include "../hooks.hpp"
+#include "../config.hpp"
 #include "../lua/LuaLoader.hpp"
 #include "../log.hpp"
 
@@ -65,6 +66,7 @@ static bool markAndProcess()
 
 void tryInitFakeLicenseOnce()
 {
+    if (!g_config.packageInjection.get()) return;
     if (g_active.load(std::memory_order_acquire)) return;
     void* pkg = g_pkg.load(std::memory_order_acquire);
     if (!pkg || !g_cuser.load(std::memory_order_acquire)) return;
@@ -89,6 +91,7 @@ void tryInitFakeLicenseOnce()
 
 void notifyLicenseChanged()
 {
+    if (!g_config.packageInjection.get()) return;
     void* pkg = g_pkg.load(std::memory_order_acquire);
     if (!pkg || !g_active.load(std::memory_order_acquire)) { tryInitFakeLicenseOnce(); return; }
 
@@ -96,7 +99,10 @@ void notifyLicenseChanged()
     auto* vec = PackageInfo::appIdVec(pkg);
     size_t changed = 0;
     for (uint32_t id : LuaLoader::takePendingRemovals())  if (findAndFastRemove(vec, id)) ++changed;
-    for (uint32_t id : LuaLoader::takePendingAdditions()) if (appendAppIdInPlace(vec, id)) ++changed;
+    for (uint32_t id : LuaLoader::takePendingAdditions()) {
+        findAndFastRemove(vec, id);                 // drop any existing copy first (de-dup, matches tryInit)
+        if (appendAppIdInPlace(vec, id)) ++changed;
+    }
     if (changed) {
         if (!markAndProcess())
             g_pLog->warn("Package: markAndProcess skipped on live change (deps not ready)\n");
