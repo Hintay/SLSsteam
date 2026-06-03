@@ -1071,7 +1071,6 @@ namespace Hooks
 
 	MarkLicenseAsChanged_t         oMarkLicenseAsChanged         = nullptr;
 	ProcessPendingLicenseUpdates_t oProcessPendingLicenseUpdates = nullptr;
-	GetPackageInfo_t               oGetPackageInfo               = nullptr;
 	CUtlMemory_Grow_t              oCUtlMemoryGrow               = nullptr;
 	DetourHook<CPackageInfo_GetPackageInfo_t> CPackageInfo_GetPackageInfo;
 
@@ -1117,7 +1116,6 @@ bool Hooks::setup()
 
 	oMarkLicenseAsChanged         = reinterpret_cast<MarkLicenseAsChanged_t>(Patterns::CUser::MarkLicenseAsChanged.address);
 	oProcessPendingLicenseUpdates = reinterpret_cast<ProcessPendingLicenseUpdates_t>(Patterns::CUser::ProcessPendingLicenseUpdates.address);
-	oGetPackageInfo               = reinterpret_cast<GetPackageInfo_t>(Patterns::CPackageInfo::GetPackageInfo.address);
 	oCUtlMemoryGrow               = reinterpret_cast<CUtlMemory_Grow_t>(Patterns::CUtlMemory::Grow.address);
 
 	bool succeeded =

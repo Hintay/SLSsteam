@@ -43,8 +43,13 @@ void removeAppAndSendChange(uint32_t appId)
     g_pLog->debug("SteamUI: removed+marked app %u\n", appId);
 }
 
+// Stamps the lua PurchasedTime into the source CSteamApp BEFORE the original
+// FillInAppOverview runs, relying on the original COPYING +0x28 into the overview
+// (not recomputing/overwriting it) — same as OST. This hook fires 0 times on the
+// Deck (CEF), so this ordering assumption must be validated on DESKTOP classic UI.
 void stampPurchaseTimeIfControlled(void** ppHolder)
 {
+    if (!g_config.packageInjection.get()) return;   // feature opt-in: inert when off
     if (!ppHolder) return;
     void* app = *ppHolder;                       // §7.8: arg3 is void**, deref once
     if (!app) return;
