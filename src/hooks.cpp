@@ -282,8 +282,15 @@ static bool hkCWebSocketConnection_BBuildAndAsyncSendFrame(void* pThis, int opco
 	// RFC6455 binary opcode — the runbook's "0x8" was an unrelated CLOSE call-site).
 	// onSendFrame returns true for the GetManifestRequestCode ServiceMethod call:
 	// DROP the frame (never sent to the CM) and report success; its response is
-	// fabricated client-side and injected on the recv path.
-	if (opcode == 0x2 && RequestCode::onSendFrame(pubData, cubData))
+	// fabricated client-side and injected on the recv path. catch(...) so a C++
+	// exception can never unwind through this C trampoline (would std::terminate).
+	bool drop = false;
+	if (opcode == 0x2)
+	{
+		try { drop = RequestCode::onSendFrame(pubData, cubData); }
+		catch (...) { drop = false; }
+	}
+	if (drop)
 		return true;
 	return Hooks::CWebSocketConnection_BBuildAndAsyncSendFrame.tramp.fn(pThis, opcode, pubData, cubData);
 }
@@ -299,7 +306,11 @@ static void* hkCCMConnection_RecvPkt(void* pThis, CNetPacket* pPacket)
 	{
 		const uint8_t* injData = nullptr;
 		uint32_t injSize = 0;
-		if (RequestCode::nextInjection(injData, injSize))
+		bool inject = false;
+		// catch(...) so a C++ exception can never unwind through this C trampoline.
+		try { inject = RequestCode::nextInjection(injData, injSize); }
+		catch (...) { inject = false; }
+		if (inject)
 		{
 			uint8_t* origData = pPacket->m_pubData;
 			uint32_t origSize = pPacket->m_cubData;

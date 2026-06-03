@@ -37,7 +37,7 @@ namespace
 	constexpr char TARGET_JOB_NAME[] = "ContentServerDirectory.GetManifestRequestCode#1";
 
 	constexpr uint32_t kMaxHdr  = 1024;
-	constexpr uint32_t kMaxBody = 8092;
+	constexpr uint32_t kMaxBody = 8192;
 	constexpr uint32_t kMaxPkt  = sizeof(MsgHdr) + kMaxHdr + kMaxBody;
 
 	// A dropped request awaiting its async code fetch. reqHdr is the request's own

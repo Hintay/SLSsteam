@@ -34,8 +34,11 @@ namespace netpacket {
         if (!(hdr->eMsg & kMsgHdrProtoFlag)) return false;
         eMsg  = static_cast<uint16_t>(hdr->eMsg & ~kMsgHdrProtoFlag);
         cbHdr = hdr->headerLength;
+        // size >= sizeof(MsgHdr) is guaranteed above, so (size - sizeof(MsgHdr))
+        // can't underflow; written this way to avoid sizeof(MsgHdr)+cbHdr overflowing
+        // for a hostile/huge headerLength.
+        if (cbHdr > size - sizeof(MsgHdr)) return false;
         const uint32_t off = sizeof(MsgHdr) + cbHdr;
-        if (off > size) return false;
         pHdr   = data + sizeof(MsgHdr);
         pBody  = data + off;
         cbBody = size - off;
