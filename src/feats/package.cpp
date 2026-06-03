@@ -51,6 +51,13 @@ static bool markAndProcess()
     void* cuser = g_cuser.load(std::memory_order_acquire);
     if (!cuser || !Hooks::oMarkLicenseAsChanged || !Hooks::oProcessPendingLicenseUpdates)
         return false;
+	// §8 (proven 2026-06-03): Mark/Process mutate the CUser license table that
+	// Steam's own threads walk. This is safe ONLY because we run inside the full
+	// SLSsteam hook set (CheckAppOwnership/GetSubscribedApps/IPC spoofs all live),
+	// which makes the re-evaluation consistent — an ISOLATED inject crashes Steam.
+	// notifyLicenseChanged runs on the FileWatcher thread; if Deck validation shows
+	// cross-thread instability, post markAndProcess onto a Steam thread (the
+	// PackageInjection config gate is the kill switch for now).
     Hooks::oMarkLicenseAsChanged(cuser, 0 /*pkgId*/, 1 /*bChanged*/);
     Hooks::oProcessPendingLicenseUpdates(cuser);
     return true;
