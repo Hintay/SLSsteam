@@ -121,6 +121,11 @@ namespace Patterns
 		extern Pattern_t GetPackageInfo;
 	}
 
+	namespace CUtlMemory
+	{
+		extern Pattern_t Grow;   // CUtlMemory<uint32>::Grow(mem*, int) via Relative anchor
+	}
+
 	//steamui.so
 	namespace ISteamMatchmakingPingResponse
 	{

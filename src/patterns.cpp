@@ -347,6 +347,17 @@ namespace Patterns
 		};
 	}
 
+	namespace CUtlMemory
+	{
+		// Anchor on a unique call-site; SigFollowMode::Relative follows the E8 to Grow.
+		Pattern_t Grow
+		{
+			"CUtlMemory<uint32>::Grow",
+			"E8 ? ? ? ? 8B 85 04 FF FF FF 83 C4 10 8B 40 54 89 85 FC FE FF FF",
+			MemHlp::SigFollowMode::Relative
+		};
+	}
+
 	//steamui.so
 	namespace ISteamMatchmakingPingResponse
 	{

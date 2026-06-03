@@ -13,6 +13,10 @@ namespace {
     std::atomic<void*> g_pkg{nullptr};
     std::atomic<void*> g_cuser{nullptr};
     std::mutex         g_injectMtx;   // serialize notify vs init (FileWatcher thread)
+
+    // Grow AppIdVec in batches to amortise realloc calls. 16 exceeds the typical lua
+    // set size (~10 ids) so a single grow is almost always enough.
+    static constexpr int kAppIdVecGrowBatch = 16;
 }
 
 namespace Package {
@@ -40,6 +44,21 @@ bool findAndFastRemove(CUtlVector<uint32_t>* vec, uint32_t appId)
         }
     }
     return false;
+}
+
+// Append into spare capacity; if full, grow via Steam's CUtlMemory::Grow then retry.
+// Caller holds g_injectMtx. Returns false only if grow is unavailable or still fails.
+static bool appendAppIdGrowing(CUtlVector<uint32_t>* vec, uint32_t appId)
+{
+    if (appendAppIdInPlace(vec, appId)) return true;   // spare slot existed
+    if (!vec || !Hooks::oCUtlMemoryGrow) return false;
+    // NOTE: Grow triggers a realloc that frees the old m_pMemory; Steam threads
+    // reading AppIdVec lock-free during this window risk a use-after-free — an
+    // escalation over the §8 in-place-write race (which only risks a stale value).
+    // Accepted per architecture; grow only fires when the lua set exceeds the
+    // initial spare (~10). Monitor the grow path during Deck validation (Task 8).
+    Hooks::oCUtlMemoryGrow(&vec->m_Memory, kAppIdVecGrowBatch); // grow by a batch (amortize)
+    return appendAppIdInPlace(vec, appId);              // retry after grow
 }
 
 void setInjectedPackage(void* pkg) { g_pkg.store(pkg, std::memory_order_release); }
@@ -80,7 +99,7 @@ void tryInitFakeLicenseOnce()
     size_t added = 0, dropped = 0;
     for (uint32_t id : ids) {
         findAndFastRemove(vec, id);                  // drop any existing copy (de-dup)
-        if (appendAppIdInPlace(vec, id)) ++added; else ++dropped;
+        if (appendAppIdGrowing(vec, id)) ++added; else ++dropped;
     }
     if (dropped) g_pLog->warn("Package: %zu ids dropped — pkg0 AppIdVec out of spare capacity\n", dropped);
     g_active.store(true, std::memory_order_release);
@@ -101,7 +120,7 @@ void notifyLicenseChanged()
     for (uint32_t id : LuaLoader::takePendingRemovals())  if (findAndFastRemove(vec, id)) ++changed;
     for (uint32_t id : LuaLoader::takePendingAdditions()) {
         findAndFastRemove(vec, id);                 // drop any existing copy first (de-dup, matches tryInit)
-        if (appendAppIdInPlace(vec, id)) ++changed;
+        if (appendAppIdGrowing(vec, id)) ++changed;
     }
     if (changed) {
         if (!markAndProcess())

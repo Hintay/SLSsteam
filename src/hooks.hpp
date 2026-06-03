@@ -114,9 +114,11 @@ namespace Hooks
 	typedef int    (*MarkLicenseAsChanged_t)(void* pCUser, uint32_t pkgId, uint8_t bChanged);
 	typedef bool   (*ProcessPendingLicenseUpdates_t)(void* pCUser);
 	typedef void*  (*GetPackageInfo_t)(void* pThis, uint32_t pkgId, uint64_t token);
+	typedef void   (*CUtlMemory_Grow_t)(void* pMem, int numToGrowBy);
 	extern MarkLicenseAsChanged_t         oMarkLicenseAsChanged;
 	extern ProcessPendingLicenseUpdates_t oProcessPendingLicenseUpdates;
 	extern GetPackageInfo_t               oGetPackageInfo; // reserved: synthetic GetPackageInfo re-call path (Spec B §5.2); pkg0 is captured via the detour
+	extern CUtlMemory_Grow_t              oCUtlMemoryGrow;
 
 	typedef void* (*CPackageInfo_GetPackageInfo_t)(void*, uint32_t, uint64_t);
 	extern DetourHook<CPackageInfo_GetPackageInfo_t> CPackageInfo_GetPackageInfo;
