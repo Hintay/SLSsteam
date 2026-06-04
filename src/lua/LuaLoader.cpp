@@ -175,8 +175,9 @@ namespace LuaLoader {
     //                   script compatibility; the flag is Steam-internal info)
     // Arg 3 (optional): 64-hex-char depot decryption key string
     //
-    // On success: inserts id into ownedAppIds; if key present and valid,
-    // inserts 32-byte parsed key into depotKeys[id].
+    // On success: inserts id into ownedAppIds and creates depotKeys[id] as an
+    // OST-compatible membership marker. If a valid key is present, the marker is
+    // overwritten with the 32-byte parsed key; no-key addappid keeps an empty key.
     static int impl_addappid(lua_State* L) {
         int argc = lua_gettop(L);
         if (argc == 0 || !lua_isinteger(L, 1))
@@ -188,6 +189,7 @@ namespace LuaLoader {
 
         uint32_t id = static_cast<uint32_t>(raw);
         ownedAppIds.insert(id);
+        depotKeys.try_emplace(id);
 
         // Register this id's contribution to the current file (refcount + mtime).
         // g_fileMtx is already held by the caller (parseLuaFile flow); during a

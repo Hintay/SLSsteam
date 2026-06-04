@@ -25,6 +25,9 @@ namespace LuaLoader {
     };
 
     // State tables — populated by real binding implementations.
+    // depotKeys mirrors OST DepotKeySet membership semantics: every addappid(id)
+    // creates an entry; an empty vector means the id is configured but no depot
+    // decryption key was supplied.
     extern std::unordered_map<uint32_t, std::vector<uint8_t>> depotKeys;
     extern std::unordered_map<uint32_t, ManifestOverride>      manifestOverrides;
     extern std::unordered_set<uint32_t>                        ownedAppIds;
@@ -62,8 +65,9 @@ namespace LuaLoader {
 
     // ── Query APIs (T2) ───────────────────────────────────────────────────────
 
-    // Returns a pointer to the 32-byte depot decryption key for depotId,
-    // or nullptr if no key was registered via addappid(..., "hexkey").
+    // Returns the 32-byte depot decryption key for depotId, or an empty vector
+    // if no key was supplied. Note: depotKeys may still contain an empty marker
+    // for ids registered via addappid(id) without a key.
     std::vector<uint8_t> getKey(uint32_t depotId);
 
     // Returns a pointer to the manifest GID+size override for depotId,

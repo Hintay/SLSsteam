@@ -46,7 +46,8 @@ extern "C" {
 
 namespace SmokeLoader {
 
-// Depot decryption keys: depotId → 32 bytes parsed from 64 hex chars.
+// Depot key table: addappid(id) creates an empty OST-compatible membership
+// marker; addappid(id, ..., hexkey) stores 32 decoded key bytes.
 static std::unordered_map<uint32_t, std::vector<uint8_t>> g_depotKeys;
 // Manifest GID+size overrides.
 struct ManifestOverride { uint64_t gid; uint64_t size; };
@@ -211,6 +212,7 @@ static int impl_addappid(lua_State* L) {
     }
     uint32_t id = static_cast<uint32_t>(raw);
     g_ownedAppIds.insert(id);
+    g_depotKeys.try_emplace(id);
 
     if (argc >= 3 && lua_isstring(L, 3)) {
         const char* hexStr = lua_tostring(L, 3);
@@ -735,12 +737,18 @@ int main() {
         // T1: mixed-case binding reachability + T2 table population.
         f << "-- test.lua: T1 case-insensitive reachability + T2+T6 bindings\n";
 
-        // addappid: basic (inserts into ownedAppIds)
+        // addappid: basic (inserts into ownedAppIds and an empty depotKeys marker)
         f << "AddAppId(12345)\n";
         // addappid with DLC flag and 64-hex key (all lowercase a-f hex digits)
         f << "ADDAPPID(99999, 1, \"" << std::string(64, 'a') << "\")\n";
-        // addappid with mixed-case name
+        // addappid with mixed-case name (also creates an empty marker)
         f << "AddAppID(11111)\n";
+        // Non-empty keys have priority over existing empty keys, and later empty
+        // addappid calls must not erase an existing non-empty key.
+        f << "ADDAPPID(22222, 1, \"" << std::string(64, 'b') << "\")\n";
+        f << "AddAppId(22222)\n";
+        f << "AddAppId(33333)\n";
+        f << "ADDAPPID(33333, 1, \"" << std::string(64, 'c') << "\")\n";
 
         // addtoken: decimal string
         f << "ADDTOKEN(12345, \"9876543210\")\n";
@@ -820,8 +828,17 @@ int main() {
             SmokeLoader::g_had_error = true;
         }
 
-        // depotKeys[99999] should be 32 bytes of 0xaa (64 'a' chars)
+        // depotKeys mirrors OST DepotKeySet membership: no-key addappid still
+        // creates an empty marker, while valid keys store 32 decoded bytes.
         auto& keys = SmokeLoader::g_depotKeys;
+        if (keys.find(12345) == keys.end() || !keys.at(12345).empty()) {
+            fprintf(stderr, "[smoke] FAIL: depotKeys[12345] empty marker missing or non-empty\n");
+            SmokeLoader::g_had_error = true;
+        }
+        if (keys.find(11111) == keys.end() || !keys.at(11111).empty()) {
+            fprintf(stderr, "[smoke] FAIL: depotKeys[11111] empty marker missing or non-empty\n");
+            SmokeLoader::g_had_error = true;
+        }
         if (keys.find(99999) == keys.end() || keys.at(99999).size() != 32) {
             fprintf(stderr, "[smoke] FAIL: depotKeys[99999] missing or wrong size\n");
             SmokeLoader::g_had_error = true;
@@ -829,6 +846,30 @@ int main() {
             for (uint8_t b : keys.at(99999)) {
                 if (b != 0xaa) {
                     fprintf(stderr, "[smoke] FAIL: depotKeys[99999] byte mismatch (got 0x%02x)\n", b);
+                    SmokeLoader::g_had_error = true;
+                    break;
+                }
+            }
+        }
+        if (keys.find(22222) == keys.end() || keys.at(22222).size() != 32) {
+            fprintf(stderr, "[smoke] FAIL: depotKeys[22222] missing or overwritten by empty marker\n");
+            SmokeLoader::g_had_error = true;
+        } else {
+            for (uint8_t b : keys.at(22222)) {
+                if (b != 0xbb) {
+                    fprintf(stderr, "[smoke] FAIL: depotKeys[22222] byte mismatch (got 0x%02x)\n", b);
+                    SmokeLoader::g_had_error = true;
+                    break;
+                }
+            }
+        }
+        if (keys.find(33333) == keys.end() || keys.at(33333).size() != 32) {
+            fprintf(stderr, "[smoke] FAIL: depotKeys[33333] empty marker was not overwritten by non-empty key\n");
+            SmokeLoader::g_had_error = true;
+        } else {
+            for (uint8_t b : keys.at(33333)) {
+                if (b != 0xcc) {
+                    fprintf(stderr, "[smoke] FAIL: depotKeys[33333] byte mismatch (got 0x%02x)\n", b);
                     SmokeLoader::g_had_error = true;
                     break;
                 }
