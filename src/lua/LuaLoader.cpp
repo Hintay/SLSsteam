@@ -15,6 +15,7 @@ extern "C" {
 #include <lualib.h>
 }
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <cerrno>
@@ -46,17 +47,33 @@ namespace LuaLoader {
     std::unordered_map<uint32_t, LuaTicket>             appTickets;
     std::unordered_map<uint32_t, LuaTicket>             encTickets;
 
-    // ── Per-file lifecycle tracking (Spec A) ───────────────────────────────
-    // All guarded by g_fileMtx. g_currentFile is set only inside the locked
-    // parse flow; addappid stamps the file→id / refcount / mtime tables.
-    std::string                                                   g_currentFile;
-    std::unordered_map<std::string, std::unordered_set<uint32_t>> g_fileIds;
-    std::unordered_map<uint32_t, uint32_t>                        g_idRefCount;
-    std::unordered_map<std::string, uint32_t>                     g_fileMtime;
-    std::unordered_map<uint32_t, uint32_t>                        g_purchaseTime;
-    std::vector<uint32_t>                                         g_pendingAdditions;
-    std::vector<uint32_t>                                         g_pendingRemovals;
-    std::mutex                                                    g_fileMtx;
+    // ── Per-file lifecycle tracking ───────────────────────────────────────
+    // All guarded by g_fileMtx and mutated only while g_luaMtx is held. Each
+    // lua file records its own contribution, then rebuildGlobalState() folds the
+    // files in scan priority order into the public tables above. This avoids
+    // stale manifest/token/stat/ticket data when a file is edited, deleted, or
+    // loses a field while another file still references the same id.
+    struct FileContribution {
+        uint32_t mtime = 0;
+        std::unordered_set<uint32_t> ownedIds;
+        std::unordered_map<uint32_t, std::vector<uint8_t>> depotKeys;
+        std::unordered_map<uint32_t, ManifestOverride> manifestOverrides;
+        std::unordered_map<uint32_t, uint64_t> appTokens;
+        std::unordered_map<uint32_t, uint64_t> statSteamIds;
+        std::unordered_map<uint32_t, LuaTicket> appTickets;
+        std::unordered_map<uint32_t, LuaTicket> encTickets;
+        int fetchCodeRef = LUA_NOREF;
+        int fetchCodeExRef = LUA_NOREF;
+    };
+
+    std::string g_currentFile;
+    FileContribution* g_currentContribution = nullptr;
+    std::unordered_map<std::string, FileContribution> g_fileContribs;
+    std::vector<std::string> g_fileOrder;
+    std::unordered_map<uint32_t, uint32_t> g_purchaseTime;
+    std::vector<uint32_t> g_pendingAdditions;
+    std::vector<uint32_t> g_pendingRemovals;
+    std::mutex g_fileMtx;
 
     // ── Internal state ─────────────────────────────────────────────────────
     static lua_State* g_lua = nullptr;
@@ -165,6 +182,123 @@ namespace LuaLoader {
         return true;
     }
 
+    static constexpr size_t kMaxLuaTicketBytes = 256 * 1024;
+
+    static void releaseContributionRefs(FileContribution& contrib)
+    {
+        if (!g_lua) return;
+        if (contrib.fetchCodeRef != LUA_NOREF) {
+            if (g_fetchCodeRef == contrib.fetchCodeRef) g_fetchCodeRef = LUA_NOREF;
+            luaL_unref(g_lua, LUA_REGISTRYINDEX, contrib.fetchCodeRef);
+            contrib.fetchCodeRef = LUA_NOREF;
+        }
+        if (contrib.fetchCodeExRef != LUA_NOREF) {
+            if (g_fetchCodeExRef == contrib.fetchCodeExRef) g_fetchCodeExRef = LUA_NOREF;
+            luaL_unref(g_lua, LUA_REGISTRYINDEX, contrib.fetchCodeExRef);
+            contrib.fetchCodeExRef = LUA_NOREF;
+        }
+    }
+
+    static size_t fileOrderRank(const std::string& path)
+    {
+        for (size_t i = 0; i < g_luaDirs.size(); ++i) {
+            const std::string& dir = g_luaDirs[i];
+            if (path.size() > dir.size() &&
+                path.compare(0, dir.size(), dir) == 0 &&
+                path[dir.size()] == '/') {
+                return i;
+            }
+        }
+        return g_luaDirs.size();
+    }
+
+    static void sortFileOrder()
+    {
+        std::sort(g_fileOrder.begin(), g_fileOrder.end(), [](const std::string& a, const std::string& b) {
+            const size_t rankA = fileOrderRank(a);
+            const size_t rankB = fileOrderRank(b);
+            if (rankA != rankB) return rankA < rankB;
+            return a < b;
+        });
+    }
+
+    static void rememberFileOrder(const std::string& path)
+    {
+        if (std::find(g_fileOrder.begin(), g_fileOrder.end(), path) == g_fileOrder.end()) {
+            g_fileOrder.push_back(path);
+        }
+        sortFileOrder();
+    }
+
+    static void eraseFileOrder(const std::string& path)
+    {
+        g_fileOrder.erase(std::remove(g_fileOrder.begin(), g_fileOrder.end(), path), g_fileOrder.end());
+    }
+
+    static void rebuildGlobalState()
+    {
+        const std::unordered_set<uint32_t> oldOwned = ownedAppIds;
+
+        depotKeys.clear();
+        manifestOverrides.clear();
+        ownedAppIds.clear();
+        appTokens.clear();
+        statSteamIds.clear();
+        appTickets.clear();
+        encTickets.clear();
+        g_purchaseTime.clear();
+        g_fetchCodeRef = LUA_NOREF;
+        g_fetchCodeExRef = LUA_NOREF;
+
+        for (const auto& path : g_fileOrder) {
+            const auto it = g_fileContribs.find(path);
+            if (it == g_fileContribs.end()) continue;
+
+            const FileContribution& contrib = it->second;
+            for (uint32_t id : contrib.ownedIds) {
+                ownedAppIds.insert(id);
+                if (contrib.mtime != 0) {
+                    uint32_t& slot = g_purchaseTime[id];
+                    if (contrib.mtime > slot) slot = contrib.mtime;
+                }
+            }
+            for (const auto& [id, key] : contrib.depotKeys) depotKeys[id] = key;
+            for (const auto& [id, ov] : contrib.manifestOverrides) manifestOverrides[id] = ov;
+            for (const auto& [id, token] : contrib.appTokens) appTokens[id] = token;
+            for (const auto& [id, steamId] : contrib.statSteamIds) statSteamIds[id] = steamId;
+            for (const auto& [id, ticket] : contrib.appTickets) appTickets[id] = ticket;
+            for (const auto& [id, ticket] : contrib.encTickets) encTickets[id] = ticket;
+            if (contrib.fetchCodeRef != LUA_NOREF) g_fetchCodeRef = contrib.fetchCodeRef;
+            if (contrib.fetchCodeExRef != LUA_NOREF) g_fetchCodeExRef = contrib.fetchCodeExRef;
+        }
+
+        for (uint32_t id : ownedAppIds) {
+            if (oldOwned.find(id) == oldOwned.end()) g_pendingAdditions.push_back(id);
+        }
+        for (uint32_t id : oldOwned) {
+            if (ownedAppIds.find(id) == ownedAppIds.end()) g_pendingRemovals.push_back(id);
+        }
+    }
+
+    static void dropFileContribution(const std::string& path, bool removeFromOrder)
+    {
+        auto it = g_fileContribs.find(path);
+        if (it != g_fileContribs.end()) {
+            releaseContributionRefs(it->second);
+            g_fileContribs.erase(it);
+        }
+        if (removeFromOrder) eraseFileOrder(path);
+    }
+
+    static FileContribution* requireParseContribution(lua_State* L, const char* fnName)
+    {
+        if (!g_currentContribution) {
+            luaL_error(L, "%s: may only be called while loading lua config files", fnName);
+            return nullptr;
+        }
+        return g_currentContribution;
+    }
+
     // ── Real binding implementations ───────────────────────────────────────
 
     // addappid(id [, dlc_flag [, hex_key]])
@@ -188,22 +322,9 @@ namespace LuaLoader {
             return luaL_error(L, "addappid: id out of uint32 range");
 
         uint32_t id = static_cast<uint32_t>(raw);
-        ownedAppIds.insert(id);
-        depotKeys.try_emplace(id);
-
-        // Register this id's contribution to the current file (refcount + mtime).
-        // g_fileMtx is already held by the caller (parseLuaFile flow); during a
-        // bare addappid outside parsing g_currentFile is empty → no-op.
-        if (!g_currentFile.empty()) {
-            if (g_fileIds[g_currentFile].insert(id).second && ++g_idRefCount[id] == 1) {
-                g_pendingAdditions.push_back(id);
-            }
-            auto mt = g_fileMtime.find(g_currentFile);
-            if (mt != g_fileMtime.end() && mt->second != 0) {
-                uint32_t& slot = g_purchaseTime[id];
-                if (mt->second > slot) slot = mt->second;
-            }
-        }
+        FileContribution* contrib = requireParseContribution(L, "addappid");
+        contrib->ownedIds.insert(id);
+        contrib->depotKeys.try_emplace(id);
 
         // Arg 3: optional 64-hex-char depot key (arg 2 is the DLC flag).
         if (argc >= 3) {
@@ -213,7 +334,7 @@ namespace LuaLoader {
                 const char* hexStr = lua_tostring(L, 3);
                 std::vector<uint8_t> keyBytes;
                 if (parseHex64(hexStr, keyBytes)) {
-                    depotKeys[id] = std::move(keyBytes);
+                    contrib->depotKeys[id] = std::move(keyBytes);
                     g_pLog->debug("LuaLoader: addappid(%u): depot key stored\n", id);
                 } else {
                     g_pLog->warn("LuaLoader: addappid(%u): invalid key (need 64 hex chars), ignoring\n", id);
@@ -248,7 +369,8 @@ namespace LuaLoader {
         if (!parseU64Decimal(tokenStr, token))
             return luaL_error(L, "addtoken: arg2 is not a valid uint64 decimal string");
 
-        appTokens[appId] = token;
+        FileContribution* contrib = requireParseContribution(L, "addtoken");
+        contrib->appTokens[appId] = token;
         g_pLog->debug("LuaLoader: addtoken(%u, ...)\n", appId);
         return 0;
     }
@@ -282,7 +404,8 @@ namespace LuaLoader {
         // Forced to 0, matching OST — see the function comment above. arg3 ignored.
         const uint64_t size = 0;
 
-        manifestOverrides[depotId] = ManifestOverride{ gid, size };
+        FileContribution* contrib = requireParseContribution(L, "setmanifestid");
+        contrib->manifestOverrides[depotId] = ManifestOverride{ gid, size };
         g_pLog->debug("LuaLoader: setmanifestid(%u, gid=%llu, size=%llu)\n",
                       depotId, static_cast<unsigned long long>(gid),
                       static_cast<unsigned long long>(size));
@@ -295,15 +418,15 @@ namespace LuaLoader {
         if (lua_gettop(L) < 1 || !lua_isfunction(L, 1))
             return luaL_error(L, "fetch_manifest_code: arg1 must be a function");
 
-        // Release any previously stored reference first.
-        if (g_fetchCodeRef != LUA_NOREF) {
-            luaL_unref(L, LUA_REGISTRYINDEX, g_fetchCodeRef);
+        FileContribution* contrib = requireParseContribution(L, "fetch_manifest_code");
+        int* refSlot = &contrib->fetchCodeRef;
+        if (*refSlot != LUA_NOREF) {
+            luaL_unref(L, LUA_REGISTRYINDEX, *refSlot);
         }
 
-        // Push the function to the top and anchor it in the registry.
         lua_pushvalue(L, 1);
-        g_fetchCodeRef = luaL_ref(L, LUA_REGISTRYINDEX);
-        g_pLog->debug("LuaLoader: fetch_manifest_code captured (ref=%d)\n", g_fetchCodeRef);
+        *refSlot = luaL_ref(L, LUA_REGISTRYINDEX);
+        g_pLog->debug("LuaLoader: fetch_manifest_code captured (ref=%d)\n", *refSlot);
         return 0;
     }
 
@@ -313,13 +436,15 @@ namespace LuaLoader {
         if (lua_gettop(L) < 1 || !lua_isfunction(L, 1))
             return luaL_error(L, "fetch_manifest_code_ex: arg1 must be a function");
 
-        if (g_fetchCodeExRef != LUA_NOREF) {
-            luaL_unref(L, LUA_REGISTRYINDEX, g_fetchCodeExRef);
+        FileContribution* contrib = requireParseContribution(L, "fetch_manifest_code_ex");
+        int* refSlot = &contrib->fetchCodeExRef;
+        if (*refSlot != LUA_NOREF) {
+            luaL_unref(L, LUA_REGISTRYINDEX, *refSlot);
         }
 
         lua_pushvalue(L, 1);
-        g_fetchCodeExRef = luaL_ref(L, LUA_REGISTRYINDEX);
-        g_pLog->debug("LuaLoader: fetch_manifest_code_ex captured (ref=%d)\n", g_fetchCodeExRef);
+        *refSlot = luaL_ref(L, LUA_REGISTRYINDEX);
+        g_pLog->debug("LuaLoader: fetch_manifest_code_ex captured (ref=%d)\n", *refSlot);
         return 0;
     }
 
@@ -402,9 +527,10 @@ namespace LuaLoader {
 
     // Parse a hex string of arbitrary even length into a byte vector.
     // Returns false and leaves out unchanged if the string is malformed
-    // (odd length, non-hex characters, or empty).
+    // (odd length, non-hex characters, empty, or too large).
     static bool parseHexBytes(const char* hex, size_t hexLen, std::vector<uint8_t>& out) {
         if (hexLen == 0 || hexLen % 2 != 0) return false;
+        if (hexLen / 2 > kMaxLuaTicketBytes) return false;
         std::vector<uint8_t> result;
         result.reserve(hexLen / 2);
         for (size_t i = 0; i < hexLen; i += 2) {
@@ -446,7 +572,7 @@ namespace LuaLoader {
 
         std::vector<uint8_t> bytes;
         if (!parseHexBytes(hex, hexLen, bytes)) {
-            g_pLog->warn("LuaLoader: setappticket(%u): malformed hex string (odd length or bad chars), skipping\n", appId);
+            g_pLog->warn("LuaLoader: setappticket(%u): malformed or too large hex string, skipping\n", appId);
             return 0;
         }
 
@@ -463,9 +589,11 @@ namespace LuaLoader {
                          appId, bytes.size());
         }
 
-        appTickets[appId] = LuaTicket{ steamId, std::move(bytes) };
+        const size_t byteCount = bytes.size();
+        FileContribution* contrib = requireParseContribution(L, "setappticket");
+        contrib->appTickets[appId] = LuaTicket{ steamId, std::move(bytes) };
         g_pLog->debug("LuaLoader: setappticket(%u): stored %zu bytes, steamId=0x%08x\n",
-                      appId, appTickets[appId].bytes.size(), steamId);
+                      appId, byteCount, steamId);
         return 0;
     }
 
@@ -494,14 +622,16 @@ namespace LuaLoader {
 
         std::vector<uint8_t> bytes;
         if (!parseHexBytes(hex, hexLen, bytes)) {
-            g_pLog->warn("LuaLoader: seteticket(%u): malformed hex string (odd length or bad chars), skipping\n", appId);
+            g_pLog->warn("LuaLoader: seteticket(%u): malformed or too large hex string, skipping\n", appId);
             return 0;
         }
 
         // Encrypted tickets do not expose a plaintext SteamID; store steamId=0.
-        encTickets[appId] = LuaTicket{ 0, std::move(bytes) };
+        const size_t byteCount = bytes.size();
+        FileContribution* contrib = requireParseContribution(L, "seteticket");
+        contrib->encTickets[appId] = LuaTicket{ 0, std::move(bytes) };
         g_pLog->debug("LuaLoader: seteticket(%u): stored %zu encrypted bytes\n",
-                      appId, encTickets[appId].bytes.size());
+                      appId, byteCount);
         return 0;
     }
 
@@ -535,7 +665,8 @@ namespace LuaLoader {
         if (!parseU64Decimal(sidStr, steamId))
             return luaL_error(L, "setstat: arg2 is not a valid uint64 decimal string");
 
-        statSteamIds[appId] = steamId;
+        FileContribution* contrib = requireParseContribution(L, "setstat");
+        contrib->statSteamIds[appId] = steamId;
         g_pLog->debug("LuaLoader: setstat(%u, steamid=%llu)\n",
                       appId, static_cast<unsigned long long>(steamId));
         return 0;
@@ -588,29 +719,11 @@ namespace LuaLoader {
         g_pLog->info("LuaLoader: reconciled %zu owned ids into g_config\n", ownedAppIds.size());
     }
 
-    // Remove every contribution of `path`. refcount→0 ids are erased from ALL
-    // lua maps (more thorough than OST, which leaks manifest/token/ticket/stat)
-    // and queued for removal. Caller holds g_luaMtx + g_fileMtx (it mutates both
-    // the lua data maps and the per-file tables).
+    // Remove every contribution of `path` and rebuild the folded lua state.
+    // Caller holds g_luaMtx + g_fileMtx.
     void unloadFile(const std::string& path) {
-        auto it = g_fileIds.find(path);
-        if (it == g_fileIds.end()) return;
-        for (uint32_t id : it->second) {
-            if (--g_idRefCount[id] == 0) {
-                g_idRefCount.erase(id);
-                g_purchaseTime.erase(id);
-                g_pendingRemovals.push_back(id);
-                ownedAppIds.erase(id);
-                depotKeys.erase(id);
-                manifestOverrides.erase(id);
-                appTokens.erase(id);
-                statSteamIds.erase(id);
-                appTickets.erase(id);
-                encTickets.erase(id);
-            }
-        }
-        g_fileIds.erase(it);
-        g_fileMtime.erase(path);
+        dropFileContribution(path, true);
+        rebuildGlobalState();
     }
 
     std::vector<uint32_t> getAllDepotIds() {
@@ -675,18 +788,18 @@ namespace LuaLoader {
             g_pLog->warn("LuaLoader: failed to open %s\n", filePath.c_str());
             return;
         }
+        FileContribution contrib;
         {
             std::error_code ec;
             auto ft = std::filesystem::last_write_time(filePath, ec);
-            uint32_t mtime = 0;
             if (!ec) {
                 auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
                     ft - decltype(ft)::clock::now() + std::chrono::system_clock::now());
-                mtime = static_cast<uint32_t>(std::chrono::system_clock::to_time_t(sctp));
+                contrib.mtime = static_cast<uint32_t>(std::chrono::system_clock::to_time_t(sctp));
             }
-            g_fileMtime[filePath] = mtime;
         }
         g_currentFile = filePath;
+        g_currentContribution = &contrib;
         std::string chunk, line;
         int lineNo = 0;
         while (std::getline(file, line)) {
@@ -723,7 +836,17 @@ namespace LuaLoader {
         if (!chunk.empty()) {
             g_pLog->warn("LuaLoader: %s: incomplete statement at end of file\n", filePath.c_str());
         }
+        g_currentContribution = nullptr;
         g_currentFile.clear();
+
+        auto it = g_fileContribs.find(filePath);
+        if (it != g_fileContribs.end()) {
+            releaseContributionRefs(it->second);
+            it->second = std::move(contrib);
+        } else {
+            g_fileContribs.emplace(filePath, std::move(contrib));
+        }
+        rememberFileOrder(filePath);
     }
 
     // ── Directory scanner ─────────────────────────────────────────────────
@@ -741,12 +864,17 @@ namespace LuaLoader {
         // Remember this dir so init() can hand it to the FileWatcher for hot-reload.
         g_luaDirs.push_back(dir);
 
+        std::vector<std::string> files;
         for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
             if (ec) break;
             if (!entry.is_regular_file()) continue;
             if (entry.path().extension() != ".lua") continue;
 
-            const std::string filePath = entry.path().string();
+            files.push_back(entry.path().string());
+        }
+
+        std::sort(files.begin(), files.end());
+        for (const auto& filePath : files) {
             g_pLog->info("LuaLoader: loading %s\n", filePath.c_str());
             parseLuaFile(filePath);
         }
@@ -768,11 +896,12 @@ namespace LuaLoader {
             // (g_fileMtx); unloadFile mutates both the lua maps and the file tables.
             std::lock_guard<std::mutex> luaLock(g_luaMtx);
             std::lock_guard<std::mutex> fileLock(g_fileMtx);
-            unloadFile(path);  // drop old contributions (the only step for delete/move-out)
             const bool removed = (mask & (IN_DELETE | IN_MOVED_FROM)) != 0;
+            dropFileContribution(path, removed);  // keep priority order on edits.
             if (!removed) {
                 parseLuaFile(path);  // re-add (parseLuaFile sets/clears g_currentFile itself)
             }
+            rebuildGlobalState();
         }
         // reconcileIntoConfig locks g_fileMtx — call it AFTER releasing the locks
         // above (std::mutex is non-recursive; double-lock would deadlock).
@@ -855,6 +984,10 @@ namespace LuaLoader {
                 scanDirectory(dir);
             }
         }
+
+        // Fold per-file contributions into public lua tables once all priority
+        // dirs have been parsed. Later scanned files win on duplicate ids.
+        rebuildGlobalState();
 
         // ── Union lua tables into g_config ────────────────────────────────
         reconcileIntoConfig();
