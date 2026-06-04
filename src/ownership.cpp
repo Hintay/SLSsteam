@@ -2,6 +2,7 @@
 
 #include "config.hpp"
 #include "log.hpp"
+#include "lua/LuaLoader.hpp"
 
 #include <mutex>
 #include <unordered_set>
@@ -50,6 +51,11 @@ void unmarkGenuinelyOwned(uint32_t appId)
 bool isControlledApp(uint32_t appId)
 {
 	return g_config.isAddedAppId(appId);
+}
+
+bool isYamlAdditionalApp(uint32_t appId)
+{
+	return g_config.yamlAddedAppIds.get().contains(appId) && !LuaLoader::hasOwnedAppId(appId);
 }
 
 bool shouldSpoofOwnership(uint32_t appId)

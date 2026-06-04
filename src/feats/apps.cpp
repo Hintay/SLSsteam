@@ -212,8 +212,11 @@ bool Apps::shouldDisableCDKey(uint32_t appId)
 
 bool Apps::shouldDisableUpdates(uint32_t appId)
 {
-	//Using AdditionalApps here aswell so users can manually block updates
-	return Ownership::isControlledApp(appId) || !isGenuinelySubscribed(appId);
+	// YAML AdditionalApps are manual unlock/block entries and must not download.
+	// Lua addappid entries may include depot keys/manifests, so leave them eligible
+	// for the download path added by the Lua layer.
+	return Ownership::isYamlAdditionalApp(appId)
+		|| (!Ownership::isControlledApp(appId) && !isGenuinelySubscribed(appId));
 }
 
 void Apps::sendGamesPlayed(CMsgClientGamesPlayed* msg)

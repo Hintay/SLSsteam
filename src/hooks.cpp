@@ -165,6 +165,83 @@ void VFTHook<T>::setup(std::shared_ptr<lm_vmt_t> vft, unsigned int index, T hook
 	this->hookFn.fn = hookFn;
 }
 
+namespace {
+	bool isConfiguredChildAppForParent(uint32_t appId, uint32_t childAppId)
+	{
+		if (!childAppId)
+		{
+			return false;
+		}
+
+		const auto dlcData = g_config.dlcData.get();
+		const auto it = dlcData.find(appId);
+		return it != dlcData.end() && it->second.dlcIds.contains(childAppId);
+	}
+
+	void filterNonMainAppDepots(const char* label, uint32_t appId, void* pDepotInfo)
+	{
+		if (!pDepotInfo)
+		{
+			return;
+		}
+
+		auto* depotInfo = reinterpret_cast<CUtlVector<DepotEntry>*>(pDepotInfo);
+		DepotEntry* entries = depotInfo->m_Memory.m_pMemory;
+		const int32_t size = depotInfo->m_Size;
+		if (!entries || size <= 0 || static_cast<uint32_t>(size) > depotInfo->m_Memory.m_nAllocationCount)
+		{
+			return;
+		}
+
+		int32_t writeIdx = 0;
+		int32_t removed = 0;
+		const bool yamlAdditionalApp = Ownership::isYamlAdditionalApp(appId);
+		for (int32_t readIdx = 0; readIdx < size; ++readIdx)
+		{
+			DepotEntry& entry = entries[readIdx];
+			const bool nonMainAppDepot = entry.AppId && entry.AppId != appId;
+			const bool configuredChild = isConfiguredChildAppForParent(appId, entry.AppId)
+				|| isConfiguredChildAppForParent(appId, entry.DlcAppId);
+			const bool hasLuaKey = !LuaLoader::getKey(entry.DepotId).empty();
+			const bool childLuaOwned = (nonMainAppDepot && LuaLoader::hasOwnedAppId(entry.AppId))
+				|| (entry.DlcAppId && LuaLoader::hasOwnedAppId(entry.DlcAppId));
+			const bool shouldFilterDepot = (nonMainAppDepot || entry.DlcAppId || configuredChild)
+				&& !hasLuaKey
+				&& !childLuaOwned
+				&& (yamlAdditionalApp || configuredChild);
+			if (shouldFilterDepot)
+			{
+				++removed;
+				g_pLog->once
+				(
+					"BuildDepotDependency(%u,%s) filtered %s non-main depot: depot=%u owner_app=%u dlc=%u gid=%llu configured_child=%i.\n",
+					appId,
+					label,
+					yamlAdditionalApp ? "YAML-only" : "YAML-configured",
+					entry.DepotId,
+					entry.AppId,
+					entry.DlcAppId,
+					(unsigned long long)entry.ManifestGid,
+					configuredChild
+				);
+				continue;
+			}
+
+			if (writeIdx != readIdx)
+			{
+				entries[writeIdx] = entry;
+			}
+			++writeIdx;
+		}
+
+		if (removed)
+		{
+			depotInfo->m_Size = writeIdx;
+			g_pLog->once("BuildDepotDependency(%u,%s) filtered %i non-main depot entries, kept %i/%i.\n", appId, label, removed, writeIdx, size);
+		}
+	}
+}
+
 __attribute__((hot))
 static void hkTraceIPC(const char* iface, const char* fn)
 {
@@ -224,6 +301,8 @@ static bool hkBuildDepotDependency(void* pUserAppMgr, uint32_t appId, void* pUse
 	// each entry's manifest GID/size from the Lua layer. ret == false means
 	// browse/verify mode (empty vector); we still pass through cleanly.
 	const bool ret = Hooks::BuildDepotDependency.tramp.fn(pUserAppMgr, appId, pUserConfig, pDepotInfo, pSharedDepotInfo, pSteamApp, pBuildId, pbBetaFallback);
+	filterNonMainAppDepots("depot", appId, pDepotInfo);
+	filterNonMainAppDepots("shared", appId, pSharedDepotInfo);
 
 	if (pDepotInfo)
 	{

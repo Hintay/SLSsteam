@@ -999,6 +999,11 @@ namespace LuaLoader {
     // reparse), so a Steam hook thread reading a raw pointer could race a
     // concurrent reload (unordered_map rehash → iterator/pointer invalidation).
     // Copying under the lock makes the result safe to use after unlock.
+    bool hasOwnedAppId(uint32_t appId) {
+        std::lock_guard<std::mutex> lock(g_luaMtx);
+        return ownedAppIds.find(appId) != ownedAppIds.end();
+    }
+
     std::vector<uint8_t> getKey(uint32_t depotId) {
         std::lock_guard<std::mutex> lock(g_luaMtx);
         auto it = depotKeys.find(depotId);

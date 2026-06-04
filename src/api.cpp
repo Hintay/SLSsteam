@@ -5,6 +5,7 @@
 
 #include "config.hpp"
 #include "filewatcher.hpp"
+#include "ownership.hpp"
 #include "utils.hpp"
 
 #include <atomic>
@@ -258,6 +259,12 @@ void SLSAPI::runPendingInstallsOnAppManagerFrame()
 
 			request.nextCheckAtMs = now + kAppInfoPollIntervalMs;
 			requeue(requeued, request);
+			continue;
+		}
+
+		if (Ownership::isYamlAdditionalApp(request.appId))
+		{
+			g_pLog->info("API InstallApp(%u, %i) blocked for YAML AdditionalApps entry.\n", request.appId, request.libraryIndex);
 			continue;
 		}
 

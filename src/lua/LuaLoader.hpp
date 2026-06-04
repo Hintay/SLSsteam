@@ -62,6 +62,10 @@ namespace LuaLoader {
     std::vector<uint32_t> takePendingAdditions();
     std::vector<uint32_t> takePendingRemovals();
 
+    // True when a live Lua contribution registered this app via addappid().
+    // Used to let Lua take precedence over yaml AdditionalApps for download policy.
+    bool hasOwnedAppId(uint32_t appId);
+
     // ── Query APIs (T2) ───────────────────────────────────────────────────────
 
     // Returns the 32-byte depot decryption key for depotId, or an empty vector
