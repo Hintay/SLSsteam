@@ -2,16 +2,16 @@
 
 #include "config.hpp"
 #include "curl.hpp"
+#include "diagnostics.hpp"
 #include "globals.hpp"
 #include "log.hpp"
-#include "utils.hpp"
 #include "version.hpp"
 
 
 #include <filesystem>
 #include <fstream>
 #include <map>
-#include <map>
+#include <sstream>
 #include <string>
 
 std::map<uint64_t, std::unordered_set<std::string>> Updater::clientHashMap = std::map<uint64_t, std::unordered_set<std::string>>();
@@ -101,31 +101,20 @@ std::string Updater::loadFromCache()
 
 bool Updater::verifySafeModeHash()
 {
-	auto path = std::filesystem::path(g_modSteamClient.path);
-
-	try
-	{
-		std::string sha256 = Utils::getFileSHA256(path.c_str());
-		g_pLog->info("steamclient.so hash is %s\n", sha256.c_str());
-
-		if (!clientHashMap.contains(VERSION))
-		{
-			return false;
-		}
-
-		const auto& safeHashes = clientHashMap[VERSION];
-		if (safeHashes.contains(sha256))
-		{
-			return true;
-		}
-
-		return false;
-	}
-	catch(std::runtime_error& err)
+	std::string sha256;
+	if (!Diagnostics::tryGetModuleSHA256(g_modSteamClient, sha256))
 	{
 		g_pLog->debug("Unable to read steamclient.so hash!\n");
 		return false;
 	}
 
-	return true;
+	g_pLog->info("steamclient.so hash is %s\n", sha256.c_str());
+
+	if (!clientHashMap.contains(VERSION))
+	{
+		return false;
+	}
+
+	const auto& safeHashes = clientHashMap[VERSION];
+	return safeHashes.contains(sha256);
 }

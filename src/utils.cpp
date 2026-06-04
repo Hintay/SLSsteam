@@ -3,6 +3,8 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -38,9 +40,32 @@ std::string Utils::getFileSHA256(const char *filePath)
 		throw std::runtime_error("Unable to read file!");
 	}
 
-	std::vector<unsigned char> bytes(std::istreambuf_iterator<char>(fs), {});
+	SHA256_CTX ctx;
+	if (SHA256_Init(&ctx) != 1)
+	{
+		throw std::runtime_error("Unable to initialize SHA256!");
+	}
+
+	char buffer[64 * 1024];
+	while (fs.good())
+	{
+		fs.read(buffer, sizeof(buffer));
+		const std::streamsize read = fs.gcount();
+		if (read > 0 && SHA256_Update(&ctx, buffer, static_cast<size_t>(read)) != 1)
+		{
+			throw std::runtime_error("Unable to update SHA256!");
+		}
+	}
+	if (fs.bad())
+	{
+		throw std::runtime_error("Unable to read complete file!");
+	}
+
 	unsigned char sha256Bytes[SHA256_DIGEST_LENGTH];
-	SHA256(bytes.data(), bytes.size(), sha256Bytes);
+	if (SHA256_Final(sha256Bytes, &ctx) != 1)
+	{
+		throw std::runtime_error("Unable to finalize SHA256!");
+	}
 
 	std::stringstream sha256;
 	for(int i = 0; i < SHA256_DIGEST_LENGTH; i++)
@@ -51,4 +76,3 @@ std::string Utils::getFileSHA256(const char *filePath)
 	fs.close();
 	return sha256.str();
 }
-

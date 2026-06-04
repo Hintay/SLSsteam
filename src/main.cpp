@@ -1,5 +1,6 @@
 #include "api.hpp"
 #include "config.hpp"
+#include "diagnostics.hpp"
 #include "globals.hpp"
 #include "hooks.hpp"
 #include "log.hpp"
@@ -173,6 +174,7 @@ static void load()
 		g_modSteamUI.base,
 		g_modSteamUI.end
 	);
+	Diagnostics::logStartupModuleSummary();
 
 
 	if (!Updater::verifySafeModeHash())
@@ -196,7 +198,9 @@ static void load()
 	// to happen before any hook fires (i.e. before Hooks::setup installs trampolines).
 	LuaLoader::init();
 
-	if (!Patterns::init())
+	const bool patternsFound = Patterns::init();
+	Diagnostics::logPatternSummary();
+	if (!patternsFound)
 	{
 		g_pLog->warn("Failed to find all patterns! Aborting...");
 		return;
