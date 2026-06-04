@@ -89,6 +89,13 @@ API: no
 #Disable cloud saves for unlocked games. Set to "no" if using CloudRedirect or similar.
 DisableCloud: yes
 
+#Manifest settings:
+#provider selects the built-in request-code provider: opensteamtool / wudrm / steamrun
+#Set useLuaManifestOverrides to "no" to ignore lua manifest overrides and keep Steam IPC's latest manifest gid.
+manifest:
+  provider: opensteamtool
+  useLuaManifestOverrides: yes
+
 #Changes your account's E-Mail clientsided. Leave blank to disable
 FakeEmail: ""
 

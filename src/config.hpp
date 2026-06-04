@@ -82,6 +82,9 @@ public:
 	// manifest.provider: selects the built-in HTTP provider for manifest code lookup.
 	// Default: "wudrm". Passed to ManifestProvider::setProvider() after load.
 	MTVariable<std::string> manifestProvider;
+	// manifest.useLuaManifestOverrides: when false, keep Steam IPC's manifest gid
+	// instead of applying lua setmanifestid(...) overrides.
+	MTVariable<bool> useLuaManifestOverrides;
 
 	// lua.paths: optional list of extra directories to scan for .lua plugin files.
 	// These are scanned after the built-in steam-root and user-config dirs.

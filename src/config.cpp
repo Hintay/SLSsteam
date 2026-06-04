@@ -309,6 +309,7 @@ bool CConfig::loadSettings()
 	{
 		const auto manifestNode = node["manifest"];
 		std::string provider = "opensteamtool";
+		bool useLuaOverrides = true;
 		if (manifestNode && manifestNode["provider"])
 		{
 			try
@@ -320,6 +321,19 @@ bool CConfig::loadSettings()
 				setError(ELoadError::ParsingException);
 			}
 		}
+		if (manifestNode && manifestNode["useLuaManifestOverrides"])
+		{
+			try
+			{
+				useLuaOverrides = manifestNode["useLuaManifestOverrides"].as<bool>();
+			}
+			catch (...)
+			{
+				setError(ELoadError::ParsingException);
+			}
+		}
+		useLuaManifestOverrides = useLuaOverrides;
+		g_pLog->info("manifest.useLuaManifestOverrides: %i\n", useLuaManifestOverrides.get());
 		// Only store the value if it was actually applied, so g_config.manifestProvider
 		// never diverges from ManifestProvider's active provider. setProvider already
 		// logs the rejection detail, so don't double-log here.

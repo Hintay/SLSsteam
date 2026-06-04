@@ -10,6 +10,19 @@
 #include "../sdk/CUser.hpp"
 #include "../sdk/IClientUtils.hpp"
 
+#include <cstring>
+
+namespace
+{
+	uint64_t serverAddressKey(const servernetadr_t& address)
+	{
+		static_assert(sizeof(address) == sizeof(uint64_t));
+		uint64_t key = 0;
+		std::memcpy(&key, &address, sizeof(key));
+		return key;
+	}
+}
+
 uint32_t FakeAppIds::lastAppLaunched;
 
 std::unordered_map<uint32_t, uint32_t> FakeAppIds::fakeAppIdMap = std::unordered_map<uint32_t, uint32_t>();
@@ -103,7 +116,7 @@ void FakeAppIds::getServerDetails(uint32_t handle, gameserverdetails_t& details)
 
 	const uint32_t realAppId = fakeAppIdMapServer[handle];
 
-	fakeAppIdMapPings[*reinterpret_cast<uint64_t*>(&details.address)] = realAppId;
+	fakeAppIdMapPings[serverAddressKey(details.address)] = realAppId;
 	details.appId = realAppId;
 
 	g_pLog->debug("Changing appId back to %u\n", realAppId);
@@ -128,7 +141,7 @@ void FakeAppIds::pingResponse(gameserverdetails_t *details)
 		return;
 	}
 
-	const uint64_t ip = *reinterpret_cast<uint64_t*>(&details->address);
+	const uint64_t ip = serverAddressKey(details->address);
 	if (!fakeAppIdMapPings.contains(ip))
 	{
 		return;

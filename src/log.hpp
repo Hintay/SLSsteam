@@ -61,10 +61,17 @@ class CLog
 			return;
 		}
 
-		size_t size = snprintf(nullptr, 0, msg, args...) + 1; //Allocate one more byte for zero termination
 		std::string formatted;
-		formatted.resize(size);
-		snprintf(formatted.data(), size, msg, args...);
+		if constexpr (sizeof...(Args) == 0)
+		{
+			formatted = msg;
+		}
+		else
+		{
+			size_t size = snprintf(nullptr, 0, msg, args...) + 1; //Allocate one more byte for zero termination
+			formatted.resize(size);
+			snprintf(formatted.data(), size, msg, args...);
+		}
 
 		std::stringstream notifySS;
 
@@ -86,10 +93,12 @@ class CLog
 
 		}
 
-		if (shouldNotify() && notifySS.str().size() > 0)
+		const std::string notifyCmd = notifySS.str();
+		if (shouldNotify() && notifyCmd.size() > 0)
 		{
-			system(notifySS.str().c_str());
-			debug("system(\"%s\")\n", notifySS.str().c_str());
+			const int rc = system(notifyCmd.c_str());
+			(void)rc;
+			debug("system(\"%s\")\n", notifyCmd.c_str());
 		}
 
 		const auto lock = std::unique_lock(mutex);

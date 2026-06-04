@@ -1,5 +1,6 @@
 #include "manifest.hpp"
 
+#include "../config.hpp"
 #include "../log.hpp"
 #include "../lua/LuaLoader.hpp"
 
@@ -19,6 +20,10 @@ void Manifest::patchDepotInfo(CUtlVector<DepotEntry>* pDepotInfo)
 	// allocation and read/write Steam-owned memory.
 	const int32_t size = pDepotInfo->m_Size;
 	if (size <= 0 || static_cast<uint32_t>(size) > pDepotInfo->m_Memory.m_nAllocationCount)
+	{
+		return;
+	}
+	if (!g_config.useLuaManifestOverrides.get())
 	{
 		return;
 	}

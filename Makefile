@@ -73,13 +73,13 @@ tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber:
 
 -include $(deps)
 obj/update.o: src/update.cpp res/version.txt
-	$(shell ./embed-version.sh)
+	$(shell sh ./embed-version.sh)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -isysteminclude -MMD -MP -c $< -o $@
 
 -include $(deps)
 obj/config.o: src/config.cpp res/config.yaml
-	$(shell ./embed-config.sh)
+	$(shell sh ./embed-config.sh)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -isysteminclude -MMD -MP -c $< -o $@
 
