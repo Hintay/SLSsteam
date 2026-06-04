@@ -726,20 +726,6 @@ namespace LuaLoader {
         rebuildGlobalState();
     }
 
-    std::vector<uint32_t> getAllDepotIds() {
-        std::lock_guard<std::mutex> lock(g_fileMtx);
-        std::vector<uint32_t> out;
-        out.reserve(ownedAppIds.size());
-        for (uint32_t id : ownedAppIds) out.push_back(id);
-        return out;
-    }
-
-    uint32_t getPurchaseTime(uint32_t appId) {
-        std::lock_guard<std::mutex> lock(g_fileMtx);
-        auto it = g_purchaseTime.find(appId);
-        return it != g_purchaseTime.end() ? it->second : 0;
-    }
-
     std::vector<uint32_t> takePendingAdditions() {
         std::lock_guard<std::mutex> lock(g_fileMtx);
         std::vector<uint32_t> out; out.swap(g_pendingAdditions); return out;

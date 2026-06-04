@@ -4,7 +4,7 @@
 
 #include "../hooks.hpp"
 #include "../config.hpp"
-#include "../lua/LuaLoader.hpp"
+#include "../ownership.hpp"
 #include "../sdk/CSteamApp.hpp"
 #include "../sdk/CSteamEngine.hpp"
 #include "../sdk/CUser.hpp"
@@ -36,7 +36,7 @@ void removeAppAndSendChange(uint32_t appId)
     void* src  = g_appChangeSource.load(std::memory_order_acquire);
     if (!ctrl || !src) return;
     // Don't clear ownership of apps proven to be genuinely subscribed.
-    if (Apps::isGenuinelyOwned(appId)) return;
+    if (Ownership::isGenuinelyOwned(appId)) return;
     void* app = Hooks::CSteamUIAppController_GetAppByID.tramp.fn(ctrl, appId, false);
     if (!app) return;
     CSteamApp::clearOwnership(app);                                // [app+0x18] = 0
@@ -44,7 +44,7 @@ void removeAppAndSendChange(uint32_t appId)
     g_pLog->debug("SteamUI: removed+marked app %u\n", appId);
 }
 
-// Stamps the lua PurchasedTime into the source CSteamApp BEFORE the original
+// Stamps the configured PurchasedTime into the source CSteamApp BEFORE the original
 // FillInAppOverview runs, relying on the original COPYING +0x28 into the overview
 // instead of recomputing/overwriting it. This hook fires 0 times on the Deck
 // (CEF), so this ordering assumption must be validated on DESKTOP classic UI.
@@ -55,8 +55,8 @@ void stampPurchaseTimeIfControlled(void** ppHolder)
     void* app = *ppHolder;                       // §7.8: arg3 is void**, deref once
     if (!app) return;
     uint32_t appId = CSteamApp::appId(app);      // [app+0x0c]
-    if (!g_config.isAddedAppId(appId)) return;   // only controlled apps
-    uint32_t t = LuaLoader::getPurchaseTime(appId);
+    if (!Ownership::isControlledApp(appId)) return;
+    uint32_t t = Ownership::getPurchaseTime(appId);
     if (t) CSteamApp::setPurchaseTime(app, t);   // [app+0x28] = t
 }
 

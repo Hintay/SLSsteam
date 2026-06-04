@@ -5,6 +5,7 @@
 #include "../config.hpp"
 #include "apps.hpp"
 #include "../lua/LuaLoader.hpp"
+#include "../ownership.hpp"
 #include "../log.hpp"
 
 #include <atomic>
@@ -149,7 +150,7 @@ void tryInitFakeLicenseOnce()
         if (g_active.load(std::memory_order_acquire)) return; // double-checked
 
         auto* vec = PackageInfo::appIdVec(pkg);
-        const auto ids = g_config.addedAppIds.get();
+        const auto ids = Ownership::getControlledAppIds();
         for (uint32_t id : ids) {
             findAndFastRemove(vec, id);                  // drop any existing copy (de-dup)
             if (appendAppIdGrowing(vec, id)) ++added; else ++dropped;
@@ -193,20 +194,19 @@ static void applyPendingChanges()
         g_pendingConfigRemovals.clear();
         g_pendingConfigAdditions.clear();
 
-        const auto finalAddedAppIds = g_config.addedAppIds.get();
         for (uint32_t id : removals) {
-            if (finalAddedAppIds.contains(id)) continue;
+            if (Ownership::isControlledApp(id)) continue;
             if (findAndFastRemove(vec, id)) { ++changed; removed.push_back(id); }
         }
         for (uint32_t id : additions) {
-            if (!finalAddedAppIds.contains(id)) continue;
+            if (!Ownership::isControlledApp(id)) continue;
             findAndFastRemove(vec, id);                 // drop any existing copy first (de-dup, matches tryInit)
             if (appendAppIdGrowing(vec, id)) ++changed;
         }
     }
 
     for (uint32_t id : removals)
-        if (!g_config.isAddedAppId(id)) Apps::unmarkGenuinelyOwned(id);
+        if (!Ownership::isControlledApp(id)) Ownership::unmarkGenuinelyOwned(id);
 
     bool processed = false;
     if (changed) {

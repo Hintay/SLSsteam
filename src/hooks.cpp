@@ -30,6 +30,8 @@
 #include "feats/requestcode.hpp"
 #include "feats/ticket.hpp"
 
+#include "ownership.hpp"
+
 #include "lua/LuaLoader.hpp"
 
 #include "sdk/AppData.hpp"
@@ -440,10 +442,10 @@ static uint32_t hkUser_CheckAppOwnership(void* pClientUser, uint32_t appId, CApp
 	// Refresh the genuine-owned cache from Steam's original ownership path before
 	// SLSsteam's spoofers mutate pOwnershipInfo. This keeps false positives from
 	// sticking for the whole session.
-	if (pOwnershipInfo && g_config.isAddedAppId(appId))
+	if (pOwnershipInfo && Ownership::isControlledApp(appId))
 	{
 		const bool genuine = ret && pOwnershipInfo->existInPackageNums > 1;
-		Apps::setGenuinelyOwned(appId, genuine);
+		Ownership::setGenuinelyOwned(appId, genuine);
 		if (genuine)
 		{
 			pOwnershipInfo->releaseState = ERELEASESTATE_RELEASED;
@@ -520,7 +522,7 @@ static void* hkCAppInfoCache_GetOrAddAppData(void* pCache, uint32_t appId, uint8
 	if (pData
 		&& g_config.packageInjection.get()
 		&& AppData::isUnresolvedAppInfo(pData)
-		&& g_config.isAddedAppId(appId))
+		&& Ownership::isControlledApp(appId))
 	{
 		AppData::setSkipFlag(pData);
 	}

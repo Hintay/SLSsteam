@@ -59,7 +59,6 @@ namespace LuaLoader {
     void setOnDepotsChanged(void (*fn)());
 
     void unloadFile(const std::string& path);
-    std::vector<uint32_t> getAllDepotIds();
     std::vector<uint32_t> takePendingAdditions();
     std::vector<uint32_t> takePendingRemovals();
 
@@ -93,8 +92,5 @@ namespace LuaLoader {
     //   3. fallback                        → ManifestProvider::fetchFromProvider(gid, outCode)
     // Returns true and writes outCode on success; outCode is validated non-zero.
     bool fetchManifestCode(uint32_t appId, uint32_t depotId, uint64_t gid, uint64_t& outCode);
-
-    // Purchase timestamp registered for appId (via setmanifestid/per-file), or 0.
-    uint32_t getPurchaseTime(uint32_t appId);
 
 } // namespace LuaLoader

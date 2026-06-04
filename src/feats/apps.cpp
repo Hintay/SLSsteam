@@ -9,26 +9,17 @@
 
 #include "../config.hpp"
 #include "../globals.hpp"
+#include "../ownership.hpp"
 
 #include "fakeappid.hpp"
 #include "package.hpp"
 
-#include <mutex>
-#include <unordered_set>
-
 bool Apps::applistRequested;
 std::map<uint32_t, int> Apps::appIdOwnerOverride;
 
-namespace
-{
-	std::unordered_set<uint32_t> g_genuinelyOwnedAppIds;
-	std::mutex g_genuinelyOwnedMutex;
-}
-
 bool Apps::isGenuinelyOwned(uint32_t appId)
 {
-	std::lock_guard<std::mutex> lock(g_genuinelyOwnedMutex);
-	return g_genuinelyOwnedAppIds.contains(appId);
+	return Ownership::isGenuinelyOwned(appId);
 }
 
 void Apps::markGenuinelyOwned(uint32_t appId)
@@ -43,25 +34,12 @@ void Apps::unmarkGenuinelyOwned(uint32_t appId)
 
 void Apps::setGenuinelyOwned(uint32_t appId, bool owned)
 {
-	std::lock_guard<std::mutex> lock(g_genuinelyOwnedMutex);
-	if (owned)
-	{
-		if (g_genuinelyOwnedAppIds.emplace(appId).second)
-		{
-			g_pLog->once("Marking %u as genuinely owned\n", appId);
-		}
-		return;
-	}
-
-	if (g_genuinelyOwnedAppIds.erase(appId))
-	{
-		g_pLog->once("Unmarking %u as genuinely owned\n", appId);
-	}
+	Ownership::setGenuinelyOwned(appId, owned);
 }
 
 bool Apps::shouldTreatAsFakeOwned(uint32_t appId)
 {
-	return g_config.isAddedAppId(appId) && !isGenuinelyOwned(appId);
+	return Ownership::shouldSpoofOwnership(appId);
 }
 
 bool Apps::isGenuinelySubscribed(uint32_t appId)
@@ -146,13 +124,13 @@ bool Apps::checkAppOwnership(uint32_t appId, CAppOwnershipInfo* pInfo)
 		g_pLog->once("Bypassing region restriction for %u\n", appId);
 	}
 
-	const auto times = g_config.subscriptionTimestamps.get();
-	if (times.contains(appId))
+	const uint32_t purchaseTime = Ownership::getPurchaseTime(appId);
+	if (purchaseTime)
 	{
-		pInfo->purchaseTime = times.at(appId);
+		pInfo->purchaseTime = purchaseTime;
 	}
 
-	const bool manualUnlock = g_config.isAddedAppId(appId);
+	const bool manualUnlock = Ownership::isControlledApp(appId);
 	if (!manualUnlock && (!g_config.playNotOwnedGames.get() || pInfo->ownsLicense))
 	{
 		return false;
@@ -199,14 +177,15 @@ void Apps::getSubscribedApps(uint32_t* appList, size_t size, uint32_t& count)
 	}
 
 	//Valve calls this function twice, once with size of 0 then again
+	const auto appIds = Ownership::getControlledAppIds();
 	if (!size || !appList)
 	{
-		count = count + g_config.addedAppIds.get().size();
+		count = count + appIds.size();
 		return;
 	}
 
 	//TODO: Maybe Add check if AppId already in list before blindly appending
-	for(auto& appId : g_config.addedAppIds.get())
+	for(auto appId : appIds)
 	{
 		appList[count++] = appId;
 	}
@@ -234,7 +213,7 @@ bool Apps::shouldDisableCDKey(uint32_t appId)
 bool Apps::shouldDisableUpdates(uint32_t appId)
 {
 	//Using AdditionalApps here aswell so users can manually block updates
-	return g_config.isAddedAppId(appId) || !isGenuinelySubscribed(appId);
+	return Ownership::isControlledApp(appId) || !isGenuinelySubscribed(appId);
 }
 
 void Apps::sendGamesPlayed(CMsgClientGamesPlayed* msg)

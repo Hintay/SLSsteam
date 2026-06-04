@@ -1,0 +1,22 @@
+#pragma once
+
+#include <cstdint>
+#include <vector>
+
+namespace Ownership {
+
+	// Aggregated ownership query API. Lua and yaml can both feed the final
+	// controlled app set, while this layer tracks genuine ownership discovered
+	// from Steam's original ownership path.
+	bool isControlledApp(uint32_t appId);
+	bool shouldSpoofOwnership(uint32_t appId);
+
+	bool isGenuinelyOwned(uint32_t appId);
+	void markGenuinelyOwned(uint32_t appId);
+	void unmarkGenuinelyOwned(uint32_t appId);
+	void setGenuinelyOwned(uint32_t appId, bool owned);
+
+	std::vector<uint32_t> getControlledAppIds();
+	uint32_t getPurchaseTime(uint32_t appId);
+
+} // namespace Ownership
