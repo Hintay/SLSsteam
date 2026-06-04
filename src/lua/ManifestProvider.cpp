@@ -5,11 +5,8 @@
 #include "../log.hpp"
 
 #include <charconv>
-#include <cerrno>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
-#include <system_error>
 #include <string>
 #include <string_view>
 #include <vector>

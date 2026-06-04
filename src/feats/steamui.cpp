@@ -23,13 +23,11 @@ namespace SteamUI {
 void setController(void* p)       { g_controller.store(p, std::memory_order_release); }
 void setAppChangeSource(void* p)  { g_appChangeSource.store(p, std::memory_order_release); }
 
-// CONCURRENCY: called from notifyLicenseChanged with g_injectMtx HELD. The Steam
-// calls below all reach the REAL originals: GetAppByID/MarkAppChange go through
-// THEIR detour trampolines (.tramp.fn) — i.e. they bypass our own capture hooks.
-// None of these take a mutex or re-enter Package code, so there is no same-thread
-// re-lock of the non-recursive g_injectMtx. (Steam's own threads reacting to
-// MarkAppChange may contend for g_injectMtx cross-thread — a brief wait, never a
-// deadlock.)
+// CONCURRENCY: called from Package::pumpOnSteamThread() after queued package
+// removals have been drained on a Steam hook thread. FileWatcher/Lua/config
+// threads must not call this directly; they only enqueue/signals pending deltas.
+// The Steam calls below reach the REAL originals through detour trampolines
+// (.tramp.fn), so they bypass our capture hooks and do not re-enter Package code.
 void removeAppAndSendChange(uint32_t appId)
 {
     void* ctrl = g_controller.load(std::memory_order_acquire);
