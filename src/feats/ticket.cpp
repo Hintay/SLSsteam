@@ -32,6 +32,22 @@ std::map<uint32_t, Ticket::SavedTicket> Ticket::encryptedTicketMap = std::map<ui
 // safe for concurrent insert+read (red-black tree rebalance corrupts a reader).
 static std::mutex ticketMapMutex;
 
+static bool applyLuaEncryptedTicketResponse(uint32_t appId, CMsgClientRequestEncryptedAppTicketResponse* msg)
+{
+	const auto luaTkt = LuaLoader::getEncTicket(appId);
+	if (!luaTkt)
+	{
+		return false;
+	}
+
+	msg->Clear();
+	msg->set_app_id(appId);
+	msg->set_eresult(ERESULT_OK);
+	msg->mutable_encrypted_app_ticket()->set_encrypted_ticket(luaTkt->bytes.data(), luaTkt->bytes.size());
+	g_pLog->debug("Using lua encrypted ticket response for %u (%zu bytes)\n", appId, luaTkt->bytes.size());
+	return true;
+}
+
 std::string Ticket::getTicketDir()
 {
 	std::stringstream ss;
@@ -203,8 +219,8 @@ Ticket::SavedTicket Ticket::getCachedEncryptedTicket(uint32_t appId)
 	// that registered a ticket via seteticket is honoured even when the app is
 	// subject to fake-app-id remapping. steamId is 0 for encrypted tickets (no
 	// plaintext SteamID available), so the GetSteamId hook falls back to
-	// oneTimeSteamIdSpoof from the app ticket path; the protobuf replay path in
-	// recvEncryptedAppTicket also skips if steamId==0.
+	// oneTimeSteamIdSpoof from the app ticket path. recvEncryptedAppTicket wraps
+	// these raw lua bytes into a CMsgClientRequestEncryptedAppTicketResponse.
 	const auto luaTkt = LuaLoader::getEncTicket(appId);
 	if (luaTkt)
 	{
@@ -315,18 +331,23 @@ void Ticket::recvEncryptedAppTicket(CMsgClientRequestEncryptedAppTicketResponse*
 		return;
 	}
 
-	SavedTicket ticket = getCachedEncryptedTicket(msg->app_id());
-	// steamId==0 means either no cached ticket, or a lua-provided raw encrypted
-	// ticket (seteticket). Raw lua bytes are NOT replayed here because they are
-	// not protobuf-wrapped; completing this path requires wrapping them in a
-	// CMsgClientRequestEncryptedAppTicketResponse (deferred — see seteticket).
+	const uint32_t appId = msg->app_id();
+	if (applyLuaEncryptedTicketResponse(appId, msg))
+	{
+		return;
+	}
+
+	SavedTicket ticket = getCachedEncryptedTicket(appId);
+	// Disk/runtime cache entries are complete serialized response protobufs and
+	// carry the SteamID captured when they were saved. steamId==0 means no replayable
+	// cached response is available.
 	if(!ticket.steamId)
 	{
 		return;
 	}
 
 	msg->ParseFromString(ticket.ticket);
-	g_pLog->debug("Using encryptedTicket_%u from disk\n", msg->app_id());
+	g_pLog->debug("Using encryptedTicket_%u from disk\n", appId);
 }
 
 void Ticket::recvAppTicket(CMsgClientGetAppOwnershipTicketResponse* msg)

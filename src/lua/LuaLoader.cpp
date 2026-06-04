@@ -469,14 +469,13 @@ namespace LuaLoader {
         return 0;
     }
 
-    // seteticket(appid, "hex_ticket")
-    // Decodes hex encrypted ticket bytes and stores in the in-memory encTickets
-    // map. steamId is set to 0 because encrypted tickets do not carry a
-    // plaintext SteamID — the GetSteamId hook will fall back to oneTimeSteamIdSpoof.
-    // Limitation: these raw bytes are served to GetEncryptedAppTicket callers but
-    // are NOT replayed through recvEncryptedAppTicket, which needs a protobuf-wrapped
-    // CMsgClientRequestEncryptedAppTicketResponse. That wrap is deferred.
-    static int impl_seteticket(lua_State* L) {
+	// seteticket(appid, "hex_ticket")
+	// Decodes hex encrypted ticket bytes and stores in the in-memory encTickets
+	// map. steamId is set to 0 because encrypted tickets do not carry a
+	// plaintext SteamID — the GetSteamId hook will fall back to oneTimeSteamIdSpoof.
+	// recvEncryptedAppTicket wraps these raw bytes in a protobuf response when the
+	// network path needs to replay the lua-provided encrypted ticket.
+	static int impl_seteticket(lua_State* L) {
         int argc = lua_gettop(L);
         if (argc < 2)
             return luaL_error(L, "seteticket: need appid and hex string");
