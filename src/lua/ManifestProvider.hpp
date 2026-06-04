@@ -5,13 +5,13 @@
 
 // Built-in HTTP providers for manifest request-code lookup.
 // Mirrors OST ManifestClient.cpp / kProviders model.
-// Default provider: "wudrm".
+// Default provider: "opensteamtool".
 //
-// The provider is selected from yaml `manifest.provider` in config.cpp:loadSettings();
+// The provider is selected from yaml `Manifest.Provider` in config.cpp:loadSettings();
 // call setProvider() directly to override at runtime.
 namespace ManifestProvider
 {
-    // Switch the active provider by name ("wudrm", "steamrun").
+    // Switch the active provider by name ("opensteamtool", "wudrm", "steamrun").
     // Returns false if the name is not recognised (active provider unchanged).
     bool setProvider(const std::string& name);
 

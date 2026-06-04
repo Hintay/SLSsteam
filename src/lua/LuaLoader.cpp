@@ -975,7 +975,7 @@ namespace LuaLoader {
             scanDirectory(userLuaDir);
         }
 
-        // 3. Extra directories from yaml lua.paths[] — wired in T9.
+        // 3. Extra directories from yaml Lua.Paths[] — wired in T9.
         //    These are scanned after the built-in dirs so they can override entries.
         {
             const auto extraDirs = g_config.luaPaths.get();

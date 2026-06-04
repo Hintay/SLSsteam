@@ -89,12 +89,26 @@ API: no
 #Disable cloud saves for unlocked games. Set to "no" if using CloudRedirect or similar.
 DisableCloud: yes
 
+#Inject added apps into Steam's live package table (pkg0) and re-evaluate licenses
+#without a restart, so deeper Steam subsystems also treat them as owned and runtime
+#lua changes apply live. Set to "no" to use only the lighter getSubscribedApps path.
+PackageInjection: yes
+
 #Manifest settings:
-#provider selects the built-in request-code provider: opensteamtool / wudrm / steamrun
-#Set useLuaManifestOverrides to "no" to ignore lua manifest overrides and keep Steam IPC's latest manifest gid.
-manifest:
-  provider: opensteamtool
-  useLuaManifestOverrides: yes
+#Provider selects the built-in request-code provider: opensteamtool / wudrm / steamrun
+#Set UseLuaManifestOverrides to "no" to ignore lua manifest overrides and keep Steam IPC's latest manifest gid.
+#TimeoutConnectMs caps DNS/TCP/TLS setup; TimeoutTotalMs caps the whole libcurl request.
+#ReuseConnection keeps the built-in provider's HTTP/TLS session warm across manifest requests.
+Manifest:
+  Provider: opensteamtool
+  UseLuaManifestOverrides: yes
+  TimeoutConnectMs: 5000
+  TimeoutTotalMs: 10000
+  ReuseConnection: yes
+
+#Additional Lua plugin directories scanned after the built-in Steam and user config dirs.
+Lua:
+  Paths: []
 
 #Changes your account's E-Mail clientsided. Leave blank to disable
 FakeEmail: ""

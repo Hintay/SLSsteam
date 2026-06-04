@@ -1,5 +1,6 @@
 #include "ManifestProvider.hpp"
 
+#include "../config.hpp"
 #include "../curl.hpp"
 #include "../log.hpp"
 
@@ -72,7 +73,7 @@ struct Provider {
 // Mirrors OST kProviders exactly: opensteamtool (default), wudrm, steamrun.
 // NOTE: wudrm is plain HTTP and is the provider OST recommends for users in
 // China; if the opensteamtool default is unreachable, set
-// `manifest.provider: wudrm` in config.yaml.
+// `Manifest.Provider: wudrm` in config.yaml.
 static const Provider kProviders[] = {
     { "opensteamtool", "https://manifest.opensteamtool.com/{gid}",      parsePlainUint    },
     // Plain HTTP is intentional: matches the upstream OST provider URL.
@@ -129,15 +130,21 @@ bool fetchFromProvider(uint64_t gid, uint64_t& outCode)
     const Provider& p   = *g_active;
     const std::string   url = buildUrl(p.urlTemplate, gid);
 
+    Curl::RequestOptions options;
+    options.timeoutConnectMs = g_config.manifestTimeoutConnectMs.get();
+    options.timeoutTotalMs = g_config.manifestTimeoutTotalMs.get();
+    options.reuseConnection = g_config.manifestReuseConnection.get();
+
     std::string body;
     long        status = 0;
     static const std::vector<std::pair<std::string, std::string>> noHeaders;
     static const std::string noBody;
 
-    int rc = Curl::request("GET", url.c_str(), noHeaders, noBody, body, status);
+    int rc = Curl::request("GET", url.c_str(), noHeaders, noBody, body, status, options);
 
-    g_pLog->info("ManifestProvider: provider='%s' gid=%llu curlrc=%d status=%ld\n",
-                 p.name, static_cast<unsigned long long>(gid), rc, status);
+    g_pLog->info("ManifestProvider: provider='%s' gid=%llu curlrc=%d status=%ld reuse=%i\n",
+                 p.name, static_cast<unsigned long long>(gid), rc, status,
+                 options.reuseConnection);
 
     if (rc != 0 || status != 200) return false;
 

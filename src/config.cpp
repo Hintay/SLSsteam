@@ -302,30 +302,66 @@ bool CConfig::loadSettings()
 		setError(ELoadError::MissingKey);
 	}
 
-	// manifest.provider — optional nested section; default "opensteamtool" if
+	// Manifest.Provider — optional nested section; default "opensteamtool" if
 	// missing (matches OST). Users who need the China-friendly wudrm mirror can
-	// set `manifest.provider: wudrm`.
+	// set `Manifest.Provider: wudrm`.
 	// Calls ManifestProvider::setProvider() so the HTTP fallback uses the right URL.
 	{
-		const auto manifestNode = node["manifest"];
+		const auto manifestNode = node["Manifest"];
 		std::string provider = "opensteamtool";
 		bool useLuaOverrides = true;
-		if (manifestNode && manifestNode["provider"])
+		uint32_t timeoutConnectMs = 5000;
+		uint32_t timeoutTotalMs = 10000;
+		bool reuseConnection = true;
+		if (manifestNode && manifestNode["Provider"])
 		{
 			try
 			{
-				provider = manifestNode["provider"].as<std::string>();
+				provider = manifestNode["Provider"].as<std::string>();
 			}
 			catch (...)
 			{
 				setError(ELoadError::ParsingException);
 			}
 		}
-		if (manifestNode && manifestNode["useLuaManifestOverrides"])
+		if (manifestNode && manifestNode["UseLuaManifestOverrides"])
 		{
 			try
 			{
-				useLuaOverrides = manifestNode["useLuaManifestOverrides"].as<bool>();
+				useLuaOverrides = manifestNode["UseLuaManifestOverrides"].as<bool>();
+			}
+			catch (...)
+			{
+				setError(ELoadError::ParsingException);
+			}
+		}
+		if (manifestNode && manifestNode["TimeoutConnectMs"])
+		{
+			try
+			{
+				timeoutConnectMs = manifestNode["TimeoutConnectMs"].as<uint32_t>();
+			}
+			catch (...)
+			{
+				setError(ELoadError::ParsingException);
+			}
+		}
+		if (manifestNode && manifestNode["TimeoutTotalMs"])
+		{
+			try
+			{
+				timeoutTotalMs = manifestNode["TimeoutTotalMs"].as<uint32_t>();
+			}
+			catch (...)
+			{
+				setError(ELoadError::ParsingException);
+			}
+		}
+		if (manifestNode && manifestNode["ReuseConnection"])
+		{
+			try
+			{
+				reuseConnection = manifestNode["ReuseConnection"].as<bool>();
 			}
 			catch (...)
 			{
@@ -333,25 +369,31 @@ bool CConfig::loadSettings()
 			}
 		}
 		useLuaManifestOverrides = useLuaOverrides;
-		g_pLog->info("manifest.useLuaManifestOverrides: %i\n", useLuaManifestOverrides.get());
+		manifestTimeoutConnectMs = timeoutConnectMs;
+		manifestTimeoutTotalMs = timeoutTotalMs;
+		manifestReuseConnection = reuseConnection;
+		g_pLog->info("Manifest.UseLuaManifestOverrides: %i\n", useLuaManifestOverrides.get());
+		g_pLog->info("Manifest.TimeoutsMs: connect=%u total=%u\n",
+			manifestTimeoutConnectMs.get(), manifestTimeoutTotalMs.get());
+		g_pLog->info("Manifest.ReuseConnection: %i\n", manifestReuseConnection.get());
 		// Only store the value if it was actually applied, so g_config.manifestProvider
 		// never diverges from ManifestProvider's active provider. setProvider already
 		// logs the rejection detail, so don't double-log here.
 		if (ManifestProvider::setProvider(provider))
 		{
 			manifestProvider = provider;
-			g_pLog->info("manifest.provider: %s\n", provider.c_str());
+			g_pLog->info("Manifest.Provider: %s\n", provider.c_str());
 		}
 	}
 
-	// lua.paths — optional list of extra directories to scan for .lua plugin files.
+	// Lua.Paths — optional list of extra directories to scan for .lua plugin files.
 	// Missing or empty section is silently ignored (no setError — it is optional).
 	{
-		const auto luaNode = node["lua"];
+		const auto luaNode = node["Lua"];
 		std::vector<std::string> paths;
-		if (luaNode && luaNode["paths"])
+		if (luaNode && luaNode["Paths"])
 		{
-			for (const auto& entry : luaNode["paths"])
+			for (const auto& entry : luaNode["Paths"])
 			{
 				try
 				{
@@ -366,7 +408,7 @@ bool CConfig::loadSettings()
 		luaPaths = paths;
 		if (!paths.empty())
 		{
-			g_pLog->info("lua.paths: %zu extra dir(s) configured\n", paths.size());
+			g_pLog->info("Lua.Paths: %zu extra dir(s) configured\n", paths.size());
 		}
 	}
 

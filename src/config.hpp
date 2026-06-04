@@ -79,14 +79,21 @@ public:
 	MTVariable<unsigned int> logLevel;
 	MTVariable<bool> extendedLogging;
 
-	// manifest.provider: selects the built-in HTTP provider for manifest code lookup.
-	// Default: "wudrm". Passed to ManifestProvider::setProvider() after load.
+	// Manifest.Provider: selects the built-in HTTP provider for manifest code lookup.
+	// Default: "opensteamtool". Passed to ManifestProvider::setProvider() after load.
 	MTVariable<std::string> manifestProvider;
-	// manifest.useLuaManifestOverrides: when false, keep Steam IPC's manifest gid
+	// Manifest.UseLuaManifestOverrides: when false, keep Steam IPC's manifest gid
 	// instead of applying lua setmanifestid(...) overrides.
 	MTVariable<bool> useLuaManifestOverrides;
+	// Manifest HTTP timeout knobs for libcurl. connect covers DNS/TCP/TLS setup;
+	// total caps the whole request and should stay below RequestCode's wait window.
+	MTVariable<uint32_t> manifestTimeoutConnectMs;
+	MTVariable<uint32_t> manifestTimeoutTotalMs;
+	// Keep the built-in manifest provider's curl handle alive across requests so
+	// libcurl can reuse keep-alive connections and TLS sessions.
+	MTVariable<bool> manifestReuseConnection;
 
-	// lua.paths: optional list of extra directories to scan for .lua plugin files.
+	// Lua.Paths: optional list of extra directories to scan for .lua plugin files.
 	// These are scanned after the built-in steam-root and user-config dirs.
 	MTVariable<std::vector<std::string>> luaPaths;
 

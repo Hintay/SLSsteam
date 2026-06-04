@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -7,6 +8,13 @@
 
 namespace Curl
 {
+	struct RequestOptions
+	{
+		uint32_t timeoutConnectMs = 5000;
+		uint32_t timeoutTotalMs = 10000;
+		bool reuseConnection = false;
+	};
+
 	// Simple GET — kept for backward compatibility; delegates to request().
 	// Returns CURLE_OK (0) on success; body appended to out.
 	int getString(const char* url, std::string& out);
@@ -24,4 +32,12 @@ namespace Curl
 	            const std::string& body,
 	            std::string& out,
 	            long& statusOut);
+
+	int request(const char* method,
+	            const char* url,
+	            const std::vector<std::pair<std::string, std::string>>& headers,
+	            const std::string& body,
+	            std::string& out,
+	            long& statusOut,
+	            const RequestOptions& options);
 }

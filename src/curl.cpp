@@ -2,10 +2,50 @@
 
 #include "log.hpp"
 
+#include <algorithm>
 #include <curl/curl.h>
 #include <curl/easy.h>
+#include <limits>
 #include <mutex>
 #include <strings.h>  // strcasecmp (POSIX)
+
+namespace
+{
+	std::once_flag s_curlInitOnce;
+	std::mutex s_reusableHandleMutex;
+	CURL* s_reusableHandle = nullptr;
+
+	void ensureCurlGlobalInit()
+	{
+		// curl_easy_init lazily runs the non-thread-safe curl_global_init on first
+		// use; force it once up-front so concurrent RequestCode fetch threads cannot
+		// race that global initialisation.
+		std::call_once(s_curlInitOnce, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+	}
+
+	uint32_t clampTimeoutMs(uint32_t value, uint32_t defVal)
+	{
+		return value == 0 ? defVal : value;
+	}
+
+	long clampCurlTimeoutMs(uint64_t value)
+	{
+		const uint64_t maxLong = static_cast<uint64_t>(std::numeric_limits<long>::max());
+		return static_cast<long>(std::min(value, maxLong));
+	}
+
+	long connectTimeoutMs(const Curl::RequestOptions& options)
+	{
+		const uint64_t connectMs = clampTimeoutMs(options.timeoutConnectMs, Curl::RequestOptions().timeoutConnectMs);
+		return std::max(1L, clampCurlTimeoutMs(connectMs));
+	}
+
+	long totalTimeoutMs(const Curl::RequestOptions& options)
+	{
+		const uint64_t totalMs = clampTimeoutMs(options.timeoutTotalMs, Curl::RequestOptions().timeoutTotalMs);
+		return std::max(1L, clampCurlTimeoutMs(totalMs));
+	}
+}
 
 // Accumulate response bytes into a std::string.
 static size_t writeCallback(const char* content, size_t size, size_t memberSize, std::string* data)
@@ -21,17 +61,38 @@ int Curl::request(const char* method,
                   std::string& out,
                   long& statusOut)
 {
+	return Curl::request(method, url, headers, body, out, statusOut, RequestOptions());
+}
+
+int Curl::request(const char* method,
+                  const char* url,
+                  const std::vector<std::pair<std::string, std::string>>& headers,
+                  const std::string& body,
+                  std::string& out,
+                  long& statusOut,
+                  const RequestOptions& options)
+{
 	statusOut = 0;
 
-	// curl_easy_init lazily runs the non-thread-safe curl_global_init on first
-	// use; force it once up-front so concurrent RequestCode fetch threads cannot
-	// race that global initialisation.
-	static std::once_flag s_curlInitOnce;
-	std::call_once(s_curlInitOnce, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+	ensureCurlGlobalInit();
 
-	CURL* handle = curl_easy_init();
+	std::unique_lock<std::mutex> reuseLock;
+	CURL* handle = nullptr;
+	if (options.reuseConnection)
+	{
+		reuseLock = std::unique_lock<std::mutex>(s_reusableHandleMutex);
+		if (!s_reusableHandle)
+			s_reusableHandle = curl_easy_init();
+		handle = s_reusableHandle;
+	}
+	else
+	{
+		handle = curl_easy_init();
+	}
 	if (!handle)
 		return CURLE_FAILED_INIT;
+
+	curl_easy_reset(handle);
 
 	curl_easy_setopt(handle, CURLOPT_URL, url);
 	curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, writeCallback);
@@ -60,8 +121,11 @@ int Curl::request(const char* method,
 	if (slist)
 		curl_easy_setopt(handle, CURLOPT_HTTPHEADER, slist);
 
-	curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 5L);  // connect timeout (s)
-	curl_easy_setopt(handle, CURLOPT_TIMEOUT, 10L);        // total transfer timeout (s); kept under RequestCode MAX_WAIT (12s)
+	curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT_MS, connectTimeoutMs(options));
+	curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, totalTimeoutMs(options));
+	curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(handle, CURLOPT_FRESH_CONNECT, options.reuseConnection ? 0L : 1L);
+	curl_easy_setopt(handle, CURLOPT_FORBID_REUSE, options.reuseConnection ? 0L : 1L);
 
 	CURLcode res = curl_easy_perform(handle);
 
@@ -71,7 +135,15 @@ int Curl::request(const char* method,
 	if (slist)
 		curl_slist_free_all(slist);
 
-	curl_easy_cleanup(handle);
+	if (!options.reuseConnection)
+		curl_easy_cleanup(handle);
+	else if (res != CURLE_OK)
+	{
+		// Drop the cached easy handle on transport/TLS failures so the next request
+		// rebuilds DNS/TCP/TLS state, matching OST's CloseConnection-on-error model.
+		curl_easy_cleanup(s_reusableHandle);
+		s_reusableHandle = nullptr;
+	}
 	return static_cast<int>(res);
 }
 

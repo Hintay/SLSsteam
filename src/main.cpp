@@ -191,7 +191,7 @@ static void load()
 
 	// Initialize the Lua VM and execute all .lua plugin files.
 	// Called here — after g_modSteamClient.path is populated (needed by getSteamRoot)
-	// and after g_config is loaded (lua.paths and manifest.provider are already parsed).
+	// and after g_config is loaded (Lua.Paths and Manifest.Provider are already parsed).
 	// Hook bindings read the lua tables lazily at call-time, so this call just needs
 	// to happen before any hook fires (i.e. before Hooks::setup installs trampolines).
 	LuaLoader::init();
