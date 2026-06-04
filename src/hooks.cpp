@@ -1,5 +1,6 @@
 #include "hooks.hpp"
 
+#include "api.hpp"
 #include "config.hpp"
 #include "globals.hpp"
 #include "log.hpp"
@@ -657,23 +658,28 @@ static void hkClientAppManager_RunIPCFrame(void* pClientAppManager, void* a1, vo
 {
 	g_pClientAppManager = reinterpret_cast<IClientAppManager*>(pClientAppManager);
 
-	std::shared_ptr<lm_vmt_t> vft = std::make_shared<lm_vmt_t>();
-	LM_VmtNew(*reinterpret_cast<lm_address_t**>(pClientAppManager), vft.get());
+	static bool hooked = false;
+	if (!hooked)
+	{
+		std::shared_ptr<lm_vmt_t> vft = std::make_shared<lm_vmt_t>();
+		LM_VmtNew(*reinterpret_cast<lm_address_t**>(pClientAppManager), vft.get());
 
-	Hooks::IClientAppManager_BIsDlcEnabled.setup(vft, VFTIndexes::IClientAppManager::BIsDlcEnabled, hkClientAppManager_BIsDlcEnabled);
-	Hooks::IClientAppManager_GetAppUpdateInfo.setup(vft, VFTIndexes::IClientAppManager::GetUpdateInfo, hkClientAppManager_GetUpdateInfo);
-	Hooks::IClientAppManager_LaunchApp.setup(vft, VFTIndexes::IClientAppManager::LaunchApp, hkClientAppManager_LaunchApp);
-	Hooks::IClientAppManager_IsAppDlcInstalled.setup(vft, VFTIndexes::IClientAppManager::IsAppDlcInstalled, hkClientAppManager_IsAppDlcInstalled);
+		Hooks::IClientAppManager_BIsDlcEnabled.setup(vft, VFTIndexes::IClientAppManager::BIsDlcEnabled, hkClientAppManager_BIsDlcEnabled);
+		Hooks::IClientAppManager_GetAppUpdateInfo.setup(vft, VFTIndexes::IClientAppManager::GetUpdateInfo, hkClientAppManager_GetUpdateInfo);
+		Hooks::IClientAppManager_LaunchApp.setup(vft, VFTIndexes::IClientAppManager::LaunchApp, hkClientAppManager_LaunchApp);
+		Hooks::IClientAppManager_IsAppDlcInstalled.setup(vft, VFTIndexes::IClientAppManager::IsAppDlcInstalled, hkClientAppManager_IsAppDlcInstalled);
 
-	Hooks::IClientAppManager_BIsDlcEnabled.place();
-	Hooks::IClientAppManager_GetAppUpdateInfo.place();
-	Hooks::IClientAppManager_LaunchApp.place();
-	Hooks::IClientAppManager_IsAppDlcInstalled.place();
+		Hooks::IClientAppManager_BIsDlcEnabled.place();
+		Hooks::IClientAppManager_GetAppUpdateInfo.place();
+		Hooks::IClientAppManager_LaunchApp.place();
+		Hooks::IClientAppManager_IsAppDlcInstalled.place();
 
-	g_pLog->debug("IClientAppManager->vft at %p\n", vft->vtable);
+		g_pLog->debug("IClientAppManager->vft at %p\n", vft->vtable);
+		hooked = true;
+	}
 
-	Hooks::IClientAppManager_RunIPCFrame.remove();
-	Hooks::IClientAppManager_RunIPCFrame.originalFn.fn(pClientAppManager, a1, a2, a3);
+	Hooks::IClientAppManager_RunIPCFrame.tramp.fn(pClientAppManager, a1, a2, a3);
+	SLSAPI::runPendingInstallsOnAppManagerFrame();
 }
 
 static unsigned int hkClientApps_GetDLCCount(void* pClientApps, uint32_t appId)

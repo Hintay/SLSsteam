@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include <openssl/sha.h>
+#include <openssl/evp.h>
 
 std::vector<std::string> Utils::strsplit(char *str, const char *delimeter)
 {
@@ -40,9 +40,15 @@ std::string Utils::getFileSHA256(const char *filePath)
 		throw std::runtime_error("Unable to read file!");
 	}
 
-	SHA256_CTX ctx;
-	if (SHA256_Init(&ctx) != 1)
+	EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+	if (!ctx)
 	{
+		throw std::runtime_error("Unable to initialize SHA256!");
+	}
+
+	if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1)
+	{
+		EVP_MD_CTX_free(ctx);
 		throw std::runtime_error("Unable to initialize SHA256!");
 	}
 
@@ -51,24 +57,29 @@ std::string Utils::getFileSHA256(const char *filePath)
 	{
 		fs.read(buffer, sizeof(buffer));
 		const std::streamsize read = fs.gcount();
-		if (read > 0 && SHA256_Update(&ctx, buffer, static_cast<size_t>(read)) != 1)
+		if (read > 0 && EVP_DigestUpdate(ctx, buffer, static_cast<size_t>(read)) != 1)
 		{
+			EVP_MD_CTX_free(ctx);
 			throw std::runtime_error("Unable to update SHA256!");
 		}
 	}
 	if (fs.bad())
 	{
+		EVP_MD_CTX_free(ctx);
 		throw std::runtime_error("Unable to read complete file!");
 	}
 
-	unsigned char sha256Bytes[SHA256_DIGEST_LENGTH];
-	if (SHA256_Final(sha256Bytes, &ctx) != 1)
+	unsigned char sha256Bytes[EVP_MAX_MD_SIZE];
+	unsigned int sha256Length = 0;
+	if (EVP_DigestFinal_ex(ctx, sha256Bytes, &sha256Length) != 1)
 	{
+		EVP_MD_CTX_free(ctx);
 		throw std::runtime_error("Unable to finalize SHA256!");
 	}
+	EVP_MD_CTX_free(ctx);
 
 	std::stringstream sha256;
-	for(int i = 0; i < SHA256_DIGEST_LENGTH; i++)
+	for(unsigned int i = 0; i < sha256Length; i++)
 	{
 		sha256 << std::hex << std::setw(2) << std::setfill('0') << (int)sha256Bytes[i];
 	}

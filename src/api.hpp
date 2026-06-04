@@ -15,5 +15,6 @@ namespace SLSAPI
 
 	bool isEnabled();
 	void onFileChange(const std::string& path, uint32_t mask);
+	void runPendingInstallsOnAppManagerFrame();
 	void init();
 }
