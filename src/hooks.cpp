@@ -382,7 +382,13 @@ static bool hkCWebSocketConnection_BBuildAndAsyncSendFrame(void* pThis, int opco
 		try { replace = Achievements::onSendFrame(pubData, cubData, newData, newSize); }
 		catch (...) { replace = false; }
 		if (replace)
+		{
+			// Schema sha probes are intentionally dropped; Achievements will inject a
+			// fabricated no-connection response on the recv path.
+			if (!newData || !newSize)
+				return true;
 			return Hooks::CWebSocketConnection_BBuildAndAsyncSendFrame.tramp.fn(pThis, opcode, const_cast<uint8_t*>(newData), newSize);
+		}
 	}
 	return Hooks::CWebSocketConnection_BBuildAndAsyncSendFrame.tramp.fn(pThis, opcode, pubData, cubData);
 }
@@ -400,6 +406,22 @@ static void* hkCCMConnection_RecvPkt(void* pThis, CNetPacket* pPacket)
 		bool inject = false;
 		// catch(...) so a C++ exception can never unwind through this C trampoline.
 		try { inject = RequestCode::nextInjection(injData, injSize); }
+		catch (...) { inject = false; }
+		if (inject)
+		{
+			uint8_t* origData = pPacket->m_pubData;
+			uint32_t origSize = pPacket->m_cubData;
+			pPacket->m_pubData = const_cast<uint8_t*>(injData);
+			pPacket->m_cubData = injSize;
+			Hooks::CCMConnection_RecvPkt.tramp.fn(pThis, pPacket);
+			pPacket->m_pubData = origData;
+			pPacket->m_cubData = origSize;
+		}
+
+		injData = nullptr;
+		injSize = 0;
+		inject = false;
+		try { inject = Achievements::nextInjection(injData, injSize); }
 		catch (...) { inject = false; }
 		if (inject)
 		{
