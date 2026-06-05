@@ -51,9 +51,9 @@ bin/pkg_smoke: tools/pkg_smoke/smoke.cpp
 
 pkg_smoke: bin/pkg_smoke
 
-bin/netpacket_smoke: tools/netpacket_smoke/smoke.cpp src/sdk/CNetPacket.hpp
+bin/netpacket_smoke: tools/netpacket_smoke/smoke.cpp src/sdk/RawNetPacket.hpp src/sdk/RawNetPacket.cpp src/sdk/CNetPacket.hpp
 	@mkdir -p bin
-	g++ -std=c++20 -m32 -O0 -g -o bin/netpacket_smoke tools/netpacket_smoke/smoke.cpp
+	g++ -std=c++20 -m32 -Og -g -o bin/netpacket_smoke tools/netpacket_smoke/smoke.cpp src/sdk/RawNetPacket.cpp
 
 netpacket_smoke: bin/netpacket_smoke
 

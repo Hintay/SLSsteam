@@ -1,8 +1,8 @@
 #include "requestcode.hpp"
 
-#include "../sdk/CNetPacket.hpp"
 #include "../sdk/CProtoBufMsgBase.hpp"   // EMsgType enum + CMsgProtoBufHeader
 #include "../sdk/EResult.hpp"
+#include "../sdk/RawNetPacket.hpp"
 #include "../sdk/protobufs/slssteam_servicemethods.pb.h"
 
 #include "../lua/LuaLoader.hpp"
@@ -12,10 +12,10 @@
 
 #include <atomic>
 #include <chrono>
-#include <cstring>
 #include <exception>
 #include <future>
 #include <mutex>
+#include <string>
 #include <vector>
 
 // Manifest request-code interception at the raw packet layer; see
@@ -34,10 +34,6 @@ namespace
 {
 	constexpr char TARGET_JOB_NAME[] = "ContentServerDirectory.GetManifestRequestCode#1";
 
-	constexpr uint32_t kMaxHdr  = 1024;
-	constexpr uint32_t kMaxBody = 8192;
-	constexpr uint32_t kMaxPkt  = sizeof(MsgHdr) + kMaxHdr + kMaxBody;
-
 	// A dropped request awaiting its async code fetch. reqHdr is the request's own
 	// protobuf header bytes, transformed into the response header at inject time.
 	struct Pending {
@@ -54,8 +50,7 @@ namespace
 
 	// Fabricated packet buffer. Written and consumed on the single CM recv thread
 	// within one RecvPkt call, so it needs no synchronisation of its own.
-	uint8_t g_injectPkt[kMaxPkt];
-	uint32_t g_cbInjectPkt = 0;
+	std::vector<uint8_t> g_injectPkt;
 
 	// Build a 147 ServiceMethodResponse into g_injectPkt: response header derived
 	// from the dropped request's header (jobid_target = request jobid_source,
@@ -74,17 +69,16 @@ namespace
 		CContentServerDirectory_GetManifestRequestCode_Response resp;
 		if (code) resp.set_manifest_request_code(code);
 
-		const size_t hl = hdr.ByteSizeLong();
-		const size_t bl = resp.ByteSizeLong();
-		if (hl > kMaxHdr || bl > kMaxBody) return false;
+		std::string hdrBytes, bodyBytes;
+		if (!hdr.SerializeToString(&hdrBytes) || !resp.SerializeToString(&bodyBytes)) return false;
 
-		MsgHdr* mh = reinterpret_cast<MsgHdr*>(g_injectPkt);
-		mh->eMsg = static_cast<uint32_t>(EMSG_SERVICE_METHOD_RESPONSE) | kMsgHdrProtoFlag;
-		mh->headerLength = static_cast<uint32_t>(hl);
-		if (!hdr.SerializeToArray(g_injectPkt + sizeof(MsgHdr), static_cast<int>(hl))) return false;
-		if (!resp.SerializeToArray(g_injectPkt + sizeof(MsgHdr) + hl, static_cast<int>(bl))) return false;
-		g_cbInjectPkt = static_cast<uint32_t>(sizeof(MsgHdr) + hl + bl);
-		return true;
+		const uint8_t* outData = nullptr;
+		uint32_t outSize = 0;
+		return netpacket::AssembleRaw(g_injectPkt,
+		                              static_cast<uint32_t>(EMSG_SERVICE_METHOD_RESPONSE) | kMsgHdrProtoFlag,
+		                              hdrBytes.data(), hdrBytes.size(),
+		                              bodyBytes.data(), bodyBytes.size(),
+		                              outData, outSize);
 	}
 }
 
@@ -95,7 +89,7 @@ namespace RequestCode
 		uint16_t eMsg = 0;
 		const uint8_t *pHdr = nullptr, *pBody = nullptr;
 		uint32_t cbHdr = 0, cbBody = 0;
-		if (!netpacket::unpackRaw(pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) return false;
+		if (!netpacket::UnpackRaw(pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) return false;
 		if (eMsg != EMSG_SERVICE_METHOD_CALL_FROM_CLIENT) return false;
 
 		CMsgProtoBufHeader hdr;
@@ -198,8 +192,8 @@ namespace RequestCode
 			g_pLog->warn("RequestCode: no code for jobid=%llu, fabricated denial\n",
 			             static_cast<unsigned long long>(ready.jobId));
 
-		outData = g_injectPkt;
-		outSize = g_cbInjectPkt;
+		outData = g_injectPkt.data();
+		outSize = static_cast<uint32_t>(g_injectPkt.size());
 		return true;
 	}
 }
