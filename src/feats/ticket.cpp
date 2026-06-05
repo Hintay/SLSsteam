@@ -5,8 +5,10 @@
 #include "../config.hpp"
 #include "../globals.hpp"
 #include "../lua/LuaLoader.hpp"
+#include "../ownership.hpp"
 
 #include "../sdk/CProtoBufMsgBase.hpp"
+#include "../sdk/RawNetPacket.hpp"
 #include "../sdk/CSteamEngine.hpp"
 #include "../sdk/CUser.hpp"
 #include "../sdk/EResult.hpp"
@@ -166,6 +168,7 @@ bool Ticket::saveTicketToCache(CMsgClientGetAppOwnershipTicketResponse* resp)
 
 	//TODO: Skip copy
 	SavedTicket ticket {};
+	ticket.steamId = g_currentSteamId;
 	ticket.ticket = bytes;
 	{
 		std::lock_guard<std::mutex> lock(ticketMapMutex);
@@ -359,6 +362,65 @@ void Ticket::recvAppTicket(CMsgClientGetAppOwnershipTicketResponse* msg)
 	}
 
 	//We do not load tickets from disk in the network layer, otherwise they won't be loaded in offline mode
+}
+
+bool Ticket::onSendFrame(const uint8_t* pubData, uint32_t cubData)
+{
+	netpacket::RawPacketView packet;
+	if (!netpacket::UnpackRaw(pubData, cubData, packet))
+	{
+		return false;
+	}
+
+	if (packet.eMsg != EMSG_APPOWNERSHIPTICKET_REQUEST)
+	{
+		return false;
+	}
+
+	CMsgClientGetAppOwnershipTicket body;
+	if (!body.ParseFromArray(packet.body, static_cast<int>(packet.bodySize)))
+	{
+		g_pLog->warn("Ticket: raw AppOwnershipTicket request has unparsable body (hdr=%u body=%u)\n", packet.headerSize, packet.bodySize);
+		return false;
+	}
+
+	const uint32_t appId = body.app_id();
+	const bool spoofedOwnership = Ownership::shouldSpoofOwnership(appId);
+	g_pLog->debug
+	(
+		"Ticket: raw AppOwnershipTicket frame appId=%u spoofed=%i size=%u\n",
+
+		appId,
+		spoofedOwnership,
+		cubData
+	);
+
+	if (!spoofedOwnership)
+	{
+		return false;
+	}
+
+	SavedTicket cached = Ticket::getCachedTicket(appId);
+	auto* user = g_pSteamEngine ? g_pSteamEngine->getUser(0) : nullptr;
+	if (user && !cached.ticket.empty())
+	{
+		user->updateAppOwnershipTicket(appId, reinterpret_cast<void*>(cached.ticket.data()), cached.ticket.size());
+		g_pLog->once("Prepared local AppOwnershipTicket for %u before dropping raw request (%zu bytes)\n", appId, cached.ticket.size());
+	}
+	else if (!user)
+	{
+		g_pLog->warn("Dropping raw AppOwnershipTicket request for %u but CUser is unavailable\n", appId);
+	}
+	else
+	{
+		g_pLog->debug("Dropping raw AppOwnershipTicket request for %u without local ticket\n", appId);
+	}
+
+	// Drop only after Steam has completed CProtoBufMsgBase::Send serialization.
+	// Returning from Send directly corrupts Steam's protobuf send state and can
+	// trigger google::protobuf::FatalException during startup.
+	g_pLog->once("Dropped raw AppOwnershipTicket request for fake-owned AppID %u\n", appId);
+	return true;
 }
 
 void Ticket::recvMsg(CProtoBufMsgBase* msg)

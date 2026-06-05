@@ -41,12 +41,14 @@
 
 #include "libmem/libmem.h"
 
+#include <atomic>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <system_error>
 #include <unordered_map>
 #include <pthread.h>
@@ -418,6 +420,14 @@ static bool hkCWebSocketConnection_BBuildAndAsyncSendFrame(void* pThis, int opco
 		// on the recv path.
 		bool drop = false;
 		try { drop = RequestCode::onSendFrame(pubData, cubData); }
+		catch (...) { drop = false; }
+		if (drop)
+			return true;
+
+		// ownership tickets: CProtoBufMsgBase::Send must still run because Steam's
+		// protobuf send path has internal state/lifetime side effects. Drop only at
+		// the serialized WebSocket frame layer to avoid message_lite CHECK failures.
+		try { drop = Ticket::onSendFrame(pubData, cubData); }
 		catch (...) { drop = false; }
 		if (drop)
 			return true;
@@ -997,26 +1007,58 @@ static bool hkClientUtils_GetOfflineMode(void* pClientUtils)
 
 static void hkClientUtils_RunIPCFrame(void* pClientUtils, void* a1, void* a2, void* a3)
 {
-	static bool hooked = false;
-	if (!hooked)
+	static std::atomic_bool hooked {false};
+	static std::mutex hookMtx;
+	if (!hooked.load(std::memory_order_acquire))
 	{
-		g_pClientUtils = reinterpret_cast<IClientUtils*>(pClientUtils);
+		std::lock_guard<std::mutex> lock(hookMtx);
+		if (!hooked.load(std::memory_order_relaxed))
+		{
+			g_pLog->debug
+			(
+				"%s first entry: pClientUtils=%p a1=%p a2=%p a3=%p tramp=%p original=%p size=%zu\n",
 
-		std::shared_ptr<lm_vmt_t> vft = std::make_shared<lm_vmt_t>();
-		LM_VmtNew(*reinterpret_cast<lm_address_t**>(pClientUtils), vft.get());
+				Hooks::IClientUtils_RunIPCFrame.name.c_str(),
+				pClientUtils,
+				a1,
+				a2,
+				a3,
+				Hooks::IClientUtils_RunIPCFrame.tramp.address,
+				Hooks::IClientUtils_RunIPCFrame.originalFn.address,
+				Hooks::IClientUtils_RunIPCFrame.size
+			);
 
-		Hooks::IClientUtils_GetAppId.setup(vft, VFTIndexes::IClientUtils::GetAppId, hkClientUtils_GetAppId);
-		Hooks::IClientUtils_GetOfflineMode.setup(vft, VFTIndexes::IClientUtils::GetOfflineMode, hkClientUtils_GetOfflineMode);
+			g_pClientUtils = reinterpret_cast<IClientUtils*>(pClientUtils);
 
-		Hooks::IClientUtils_GetAppId.place();
-		Hooks::IClientUtils_GetOfflineMode.place();
+			std::shared_ptr<lm_vmt_t> vft = std::make_shared<lm_vmt_t>();
+			LM_VmtNew(*reinterpret_cast<lm_address_t**>(pClientUtils), vft.get());
 
-		g_pLog->debug("IClientUtils->vft at %p\n", vft->vtable);
+			Hooks::IClientUtils_GetAppId.setup(vft, VFTIndexes::IClientUtils::GetAppId, hkClientUtils_GetAppId);
+			Hooks::IClientUtils_GetOfflineMode.setup(vft, VFTIndexes::IClientUtils::GetOfflineMode, hkClientUtils_GetOfflineMode);
 
-		hooked = true;
+			Hooks::IClientUtils_GetAppId.place();
+			Hooks::IClientUtils_GetOfflineMode.place();
+
+			g_pLog->debug("IClientUtils->vft at %p\n", vft->vtable);
+
+			// IClientUtils_RunIPCFrame is only needed as a one-shot seam to install the
+			// VFT hooks above. Remove the detour after that so Steam threads do not keep
+			// tail-calling through our trampoline fast path during startup/shutdown.
+			g_pLog->debug
+			(
+				"%s removing one-shot detour after VFT hook: tramp=%p original=%p size=%zu\n",
+
+				Hooks::IClientUtils_RunIPCFrame.name.c_str(),
+				Hooks::IClientUtils_RunIPCFrame.tramp.address,
+				Hooks::IClientUtils_RunIPCFrame.originalFn.address,
+				Hooks::IClientUtils_RunIPCFrame.size
+			);
+			Hooks::IClientUtils_RunIPCFrame.remove();
+			hooked.store(true, std::memory_order_release);
+		}
 	}
 
-	Hooks::IClientUtils_RunIPCFrame.tramp.fn(pClientUtils, a1, a2, a3);
+	Hooks::IClientUtils_RunIPCFrame.originalFn.fn(pClientUtils, a1, a2, a3);
 }
 
 static bool hkClientUser_BLoggedOn(void* pClientUser)
@@ -1041,7 +1083,55 @@ static bool hkClientUser_BLoggedOn(void* pClientUser)
 
 static uint32_t hkClientUser_BUpdateOwnershipTicket(void* pClientUser, uint32_t appId, bool staleOnly)
 {
-	const auto cached = Ticket::getCachedTicket(appId);
+	auto cached = Ticket::getCachedTicket(appId);
+	const bool spoofedOwnership = Ownership::shouldSpoofOwnership(appId);
+	g_pLog->debug
+	(
+		"%s enter: pClientUser=%p appId=%u staleOnly=%i spoofed=%i cachedSteamId=%u cachedTicketSize=%zu steamEngine=%p\n",
+
+		Hooks::IClientUser_BUpdateAppOwnershipTicket.name.c_str(),
+		pClientUser,
+		appId,
+		staleOnly,
+		spoofedOwnership,
+		cached.steamId,
+		cached.ticket.size(),
+		g_pSteamEngine
+	);
+
+	if (spoofedOwnership)
+	{
+		auto* user = g_pSteamEngine ? g_pSteamEngine->getUser(0) : nullptr;
+		g_pLog->debug
+		(
+			"%s suppressing remote update: appId=%u user=%p localTicketSize=%zu\n",
+
+			Hooks::IClientUser_BUpdateAppOwnershipTicket.name.c_str(),
+			appId,
+			user,
+			cached.ticket.size()
+		);
+
+		if (user && !cached.ticket.empty())
+		{
+			user->updateAppOwnershipTicket(appId, reinterpret_cast<void*>(cached.ticket.data()), cached.ticket.size());
+			g_pLog->once("Suppressed remote AppOwnershipTicket update for %u; loaded local ticket (%zu bytes)\n", appId, cached.ticket.size());
+			return 1;
+		}
+
+		if (!user)
+		{
+			g_pLog->warn("Suppressed remote AppOwnershipTicket update for %u but CUser is unavailable\n", appId);
+		}
+		else
+		{
+			g_pLog->debug("Suppressed remote AppOwnershipTicket update for %u without local ticket; not posting synthetic OK callback\n", appId);
+		}
+
+		g_pLog->once("Suppressed remote AppOwnershipTicket update for %u without local ticket\n", appId);
+		return 1;
+	}
+
 	if (Apps::isGenuinelySubscribed(appId) && !cached.steamId)
 	{
 		staleOnly = false;

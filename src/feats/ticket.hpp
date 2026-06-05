@@ -41,5 +41,6 @@ public:
 
 	void recvEncryptedAppTicket(CMsgClientRequestEncryptedAppTicketResponse* msg);
 	void recvAppTicket(CMsgClientGetAppOwnershipTicketResponse* msg);
+	bool onSendFrame(const uint8_t* pubData, uint32_t cubData);
 	void recvMsg(CProtoBufMsgBase* msg);
 }

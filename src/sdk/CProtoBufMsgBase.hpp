@@ -18,7 +18,8 @@ enum EMsgType : uint16_t
 	EMSG_GAMESPLAYED = 742,
 	EMSG_REQUEST_USERSTATS = 818,                  //k_EMsgClientGetUserStats (outgoing client stats request)
 	EMSG_REQUEST_USERSTATS_RESPONSE = 819,         //k_EMsgClientGetUserStatsResponse (incoming client stats response)
-	EMSG_APPOWNERSHIPTICKET_RESPONSE = 858,
+	EMSG_APPOWNERSHIPTICKET_REQUEST = 857,       //k_EMsgClientGetAppOwnershipTicket (outgoing raw-frame drop)
+	EMSG_APPOWNERSHIPTICKET_RESPONSE = 858,      //k_EMsgClientGetAppOwnershipTicketResponse (incoming cache save)
 	EMSG_ENCRYPTED_APPTICKET_RESPONSE = 5527,
 	EMSG_WALLET_INFO_UPDATE = 5528,
 	EMSG_GAMESPLAYED_WITH_DATABLOB = 5410,
