@@ -93,6 +93,18 @@ namespace Patterns
 		SigFollowMode::None
 	};
 
+	Pattern_t BUpdateAppDownloadPlan
+	{
+		"BUpdateAppDownloadPlan",
+		// Internal steamclient helper, unofficial name. Plans or refreshes an
+		// app's depot download/update work and calls BuildDepotDependency.
+		// Entry at RE-verified 00ff3250: PIC thunk; ADD GOT; EBP frame;
+		// sub esp,0xdc; spill arg3; read arg1->flags. The PIC thunk call and
+		// GOT displacement are wildcarded.
+		"E8 ? ? ? ? 05 ? ? ? ? 55 89 E5 57 56 53 81 EC DC 00 00 00 89 85 50 FF FF FF 8B 45 10 89 85 40 FF FF FF 8B 45 08 8B 40 04",
+		SigFollowMode::None
+	};
+
 	Pattern_t TraceIPC
 	{
 		"TraceIPC",
@@ -440,4 +452,3 @@ namespace Patterns
 
 	std::vector<Pattern_t*> patterns;
 }
-

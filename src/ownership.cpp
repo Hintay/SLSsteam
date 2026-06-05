@@ -58,6 +58,11 @@ bool isYamlAdditionalApp(uint32_t appId)
 	return g_config.yamlAddedAppIds.get().contains(appId) && !LuaLoader::hasOwnedAppId(appId);
 }
 
+bool isYamlOnlyAdditionalApp(uint32_t appId)
+{
+	return isYamlAdditionalApp(appId) && !isGenuinelyOwned(appId);
+}
+
 bool shouldSpoofOwnership(uint32_t appId)
 {
 	return isControlledApp(appId) && !isGenuinelyOwned(appId);

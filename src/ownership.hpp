@@ -10,6 +10,7 @@ namespace Ownership {
 	// from Steam's original ownership path.
 	bool isControlledApp(uint32_t appId);
 	bool isYamlAdditionalApp(uint32_t appId);
+	bool isYamlOnlyAdditionalApp(uint32_t appId);
 	bool shouldSpoofOwnership(uint32_t appId);
 
 	bool isGenuinelyOwned(uint32_t appId);

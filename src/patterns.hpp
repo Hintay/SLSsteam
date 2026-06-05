@@ -33,6 +33,7 @@ namespace Patterns
 
 	extern Pattern_t LoadDepotDecryptionKey;
 	extern Pattern_t BuildDepotDependency;
+	extern Pattern_t BUpdateAppDownloadPlan;
 
 	extern Pattern_t TraceIPC;
 

@@ -48,6 +48,7 @@
 #include <cstring>
 #include <memory>
 #include <system_error>
+#include <unordered_map>
 #include <pthread.h>
 #include <strings.h>
 #include <unistd.h>
@@ -166,19 +167,42 @@ void VFTHook<T>::setup(std::shared_ptr<lm_vmt_t> vft, unsigned int index, T hook
 }
 
 namespace {
-	bool isConfiguredChildAppForParent(uint32_t appId, uint32_t childAppId)
+	constexpr std::ptrdiff_t kSteamAppStateFlagsOffset = 0x4;
+	constexpr std::ptrdiff_t kSteamAppIdOffset = 0x8;
+
+	bool isConfiguredChildAppForParent(const std::unordered_map<uint32_t, CConfig::CDlcData>& dlcData, uint32_t appId, uint32_t childAppId)
 	{
 		if (!childAppId)
 		{
 			return false;
 		}
 
-		const auto dlcData = g_config.dlcData.get();
 		const auto it = dlcData.find(appId);
 		return it != dlcData.end() && it->second.dlcIds.contains(childAppId);
 	}
 
-	void filterNonMainAppDepots(const char* label, uint32_t appId, void* pDepotInfo)
+	bool isLuaExplicitDepotDependency(const DepotEntry& entry)
+	{
+		return !LuaLoader::getKey(entry.DepotId).empty()
+			|| (entry.AppId && LuaLoader::hasOwnedAppId(entry.AppId))
+			|| (entry.DlcAppId && LuaLoader::hasOwnedAppId(entry.DlcAppId));
+	}
+
+	bool isYamlConfiguredDepotDependency(const std::unordered_map<uint32_t, CConfig::CDlcData>& dlcData, uint32_t appId, const DepotEntry& entry)
+	{
+		return (entry.AppId && Ownership::isYamlAdditionalApp(entry.AppId))
+			|| (entry.DlcAppId && Ownership::isYamlAdditionalApp(entry.DlcAppId))
+			|| isConfiguredChildAppForParent(dlcData, appId, entry.AppId)
+			|| isConfiguredChildAppForParent(dlcData, appId, entry.DlcAppId);
+	}
+
+	bool shouldFilterYamlConfiguredDepot(const std::unordered_map<uint32_t, CConfig::CDlcData>& dlcData, uint32_t appId, const DepotEntry& entry)
+	{
+		return isYamlConfiguredDepotDependency(dlcData, appId, entry)
+			&& !isLuaExplicitDepotDependency(entry);
+	}
+
+	void filterYamlConfiguredDepots(const char* label, uint32_t appId, void* pDepotInfo)
 	{
 		if (!pDepotInfo)
 		{
@@ -193,36 +217,24 @@ namespace {
 			return;
 		}
 
+		const auto dlcData = g_config.dlcData.get();
 		int32_t writeIdx = 0;
 		int32_t removed = 0;
-		const bool yamlAdditionalApp = Ownership::isYamlAdditionalApp(appId);
 		for (int32_t readIdx = 0; readIdx < size; ++readIdx)
 		{
 			DepotEntry& entry = entries[readIdx];
-			const bool nonMainAppDepot = entry.AppId && entry.AppId != appId;
-			const bool configuredChild = isConfiguredChildAppForParent(appId, entry.AppId)
-				|| isConfiguredChildAppForParent(appId, entry.DlcAppId);
-			const bool hasLuaKey = !LuaLoader::getKey(entry.DepotId).empty();
-			const bool childLuaOwned = (nonMainAppDepot && LuaLoader::hasOwnedAppId(entry.AppId))
-				|| (entry.DlcAppId && LuaLoader::hasOwnedAppId(entry.DlcAppId));
-			const bool shouldFilterDepot = (nonMainAppDepot || entry.DlcAppId || configuredChild)
-				&& !hasLuaKey
-				&& !childLuaOwned
-				&& (yamlAdditionalApp || configuredChild);
-			if (shouldFilterDepot)
+			if (shouldFilterYamlConfiguredDepot(dlcData, appId, entry))
 			{
 				++removed;
 				g_pLog->once
 				(
-					"BuildDepotDependency(%u,%s) filtered %s non-main depot: depot=%u owner_app=%u dlc=%u gid=%llu configured_child=%i.\n",
+					"BuildDepotDependency(%u,%s) filtered YAML-configured depot: depot=%u owner_app=%u dlc=%u gid=%llu.\n",
 					appId,
 					label,
-					yamlAdditionalApp ? "YAML-only" : "YAML-configured",
 					entry.DepotId,
 					entry.AppId,
 					entry.DlcAppId,
-					(unsigned long long)entry.ManifestGid,
-					configuredChild
+					(unsigned long long)entry.ManifestGid
 				);
 				continue;
 			}
@@ -236,8 +248,14 @@ namespace {
 
 		if (removed)
 		{
+			if (writeIdx <= 0)
+			{
+				g_pLog->once("BuildDepotDependency(%u,%s) would filter all %i depot entries; keeping original list because Steam treats an empty dependency vector as a fallback signal.\n", appId, label, size);
+				return;
+			}
+
 			depotInfo->m_Size = writeIdx;
-			g_pLog->once("BuildDepotDependency(%u,%s) filtered %i non-main depot entries, kept %i/%i.\n", appId, label, removed, writeIdx, size);
+			g_pLog->once("BuildDepotDependency(%u,%s) filtered %i YAML-configured depot entries, kept %i/%i.\n", appId, label, removed, writeIdx, size);
 		}
 	}
 }
@@ -297,12 +315,17 @@ static int hkLoadDepotDecryptionKey(void* pObject, uint32_t foo, char* KeyName, 
 
 static bool hkBuildDepotDependency(void* pUserAppMgr, uint32_t appId, void* pUserConfig, void* pDepotInfo, void* pSharedDepotInfo, void* pSteamApp, uint32_t* pBuildId, bool* pbBetaFallback)
 {
-	// Run the original first so the depot vector is fully populated, then pin
-	// each entry's manifest GID/size from the Lua layer. ret == false means
-	// browse/verify mode (empty vector); we still pass through cleanly.
 	const bool ret = Hooks::BuildDepotDependency.tramp.fn(pUserAppMgr, appId, pUserConfig, pDepotInfo, pSharedDepotInfo, pSteamApp, pBuildId, pbBetaFallback);
-	filterNonMainAppDepots("depot", appId, pDepotInfo);
-	filterNonMainAppDepots("shared", appId, pSharedDepotInfo);
+	// Do not empty YAML-only dependency vectors here; Steam treats empty vectors as a fallback signal.
+	if (Ownership::isYamlOnlyAdditionalApp(appId))
+	{
+		g_pLog->once("BuildDepotDependency(%u) left YAML-only app depot list unchanged; update/install entry points are responsible for blocking downloads.\n", appId);
+	}
+	else
+	{
+		filterYamlConfiguredDepots("depot", appId, pDepotInfo);
+		filterYamlConfiguredDepots("shared", appId, pSharedDepotInfo);
+	}
 
 	if (pDepotInfo)
 	{
@@ -310,6 +333,31 @@ static bool hkBuildDepotDependency(void* pUserAppMgr, uint32_t appId, void* pUse
 	}
 
 	return ret;
+}
+
+static bool hkBUpdateAppDownloadPlan(void* pSteamApp, void* pAppManagerInner, bool flag)
+{
+	if (pSteamApp)
+	{
+		uint32_t stateFlags = 0;
+		uint32_t appId = 0;
+		std::memcpy(&stateFlags, static_cast<const char*>(pSteamApp) + kSteamAppStateFlagsOffset, sizeof(stateFlags));
+		std::memcpy(&appId, static_cast<const char*>(pSteamApp) + kSteamAppIdOffset, sizeof(appId));
+
+		if (Ownership::isYamlOnlyAdditionalApp(appId))
+		{
+			g_pLog->once
+			(
+				"BUpdateAppDownloadPlan(%u) blocked YAML-only app update/download planning: app_state_flags=0x%x flag=%i.\n",
+				appId,
+				stateFlags,
+				flag
+			);
+			return false;
+		}
+	}
+
+	return Hooks::BUpdateAppDownloadPlan.tramp.fn(pSteamApp, pAppManagerInner, flag);
 }
 
 static uint32_t hkCAPIJob_GetPlayerStats(void* pAPIJob)
@@ -1278,6 +1326,7 @@ namespace Hooks
 
 	DetourHook<LoadDepotDecryptionKey_t> LoadDepotDecryptionKey;
 	DetourHook<BuildDepotDependency_t> BuildDepotDependency;
+	DetourHook<BUpdateAppDownloadPlan_t> BUpdateAppDownloadPlan;
 
 	DetourHook<CAPIJob_GetPlayerStats_t> CAPIJob_GetPlayerStats;
 
@@ -1351,6 +1400,7 @@ bool Hooks::setup()
 
 		&& LoadDepotDecryptionKey.setup(Patterns::LoadDepotDecryptionKey, &hkLoadDepotDecryptionKey)
 		&& BuildDepotDependency.setup(Patterns::BuildDepotDependency, &hkBuildDepotDependency)
+		&& BUpdateAppDownloadPlan.setup(Patterns::BUpdateAppDownloadPlan, &hkBUpdateAppDownloadPlan)
 
 		&& CAPIJob_GetPlayerStats.setup(Patterns::CAPIJob::GetPlayerStats, &hkCAPIJob_GetPlayerStats)
 
@@ -1413,6 +1463,7 @@ void Hooks::place()
 
 	LoadDepotDecryptionKey.place();
 	BuildDepotDependency.place();
+	BUpdateAppDownloadPlan.place();
 
 	CAPIJob_GetPlayerStats.place();
 
@@ -1464,6 +1515,7 @@ void Hooks::remove()
 
 	LoadDepotDecryptionKey.remove();
 	BuildDepotDependency.remove();
+	BUpdateAppDownloadPlan.remove();
 
 	CAPIJob_GetPlayerStats.remove();
 

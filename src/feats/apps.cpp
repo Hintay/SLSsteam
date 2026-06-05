@@ -212,10 +212,11 @@ bool Apps::shouldDisableCDKey(uint32_t appId)
 
 bool Apps::shouldDisableUpdates(uint32_t appId)
 {
-	// YAML AdditionalApps are manual unlock/block entries and must not download.
+	// YAML-only AdditionalApps are manual unlock/block entries and must not download.
 	// Lua addappid entries may include depot keys/manifests, so leave them eligible
-	// for the download path added by the Lua layer.
-	return Ownership::isYamlAdditionalApp(appId)
+	// for the download path added by the Lua layer. Genuinely owned apps should
+	// keep their normal update flow even if they also appear in YAML.
+	return Ownership::isYamlOnlyAdditionalApp(appId)
 		|| (!Ownership::isControlledApp(appId) && !isGenuinelySubscribed(appId));
 }
 

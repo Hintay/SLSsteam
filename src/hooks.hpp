@@ -88,6 +88,9 @@ namespace Hooks
 	// 8-arg cdecl. arg4 (pDepotInfo) is a CUtlVector<DepotEntry>*; typed as void*
 	// here so the header stays decoupled from the sdk layout, the hook casts it.
 	typedef bool(*BuildDepotDependency_t)(void*, uint32_t, void*, void*, void*, void*, uint32_t*, bool*);
+	// Internal steamclient helper, unofficial name. Plans or refreshes an app's
+	// depot download/update work and calls BuildDepotDependency.
+	typedef bool(*BUpdateAppDownloadPlan_t)(void*, void*, bool);
 
 	typedef uint32_t(*CAPIJob_GetPlayerStats_t)(void*);
 
@@ -141,6 +144,7 @@ namespace Hooks
 
 	extern DetourHook<LoadDepotDecryptionKey_t> LoadDepotDecryptionKey;
 	extern DetourHook<BuildDepotDependency_t> BuildDepotDependency;
+	extern DetourHook<BUpdateAppDownloadPlan_t> BUpdateAppDownloadPlan;
 
 	extern DetourHook<CAPIJob_GetPlayerStats_t> CAPIJob_GetPlayerStats;
 

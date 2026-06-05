@@ -262,9 +262,9 @@ void SLSAPI::runPendingInstallsOnAppManagerFrame()
 			continue;
 		}
 
-		if (Ownership::isYamlAdditionalApp(request.appId))
+		if (Ownership::isYamlOnlyAdditionalApp(request.appId))
 		{
-			g_pLog->info("API InstallApp(%u, %i) blocked for YAML AdditionalApps entry.\n", request.appId, request.libraryIndex);
+			g_pLog->info("API InstallApp(%u, %i) blocked for YAML-only AdditionalApps entry.\n", request.appId, request.libraryIndex);
 			continue;
 		}
 
