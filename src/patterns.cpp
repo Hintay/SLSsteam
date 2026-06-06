@@ -9,18 +9,20 @@
 #include <memory>
 
 
-Pattern_t::Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMode followMode, lm_module_t* module)
+Pattern_t::Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMode followMode, lm_module_t* module, bool optional)
 	:
-	Pattern_t(name, pattern, followMode, std::vector<uint8_t>(), module)
+	Pattern_t(name, pattern, followMode, std::vector<uint8_t>(), module, optional)
 {
 }
 
-Pattern_t::Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMode followMode, std::vector<uint8_t> prologue, lm_module_t* module)
+Pattern_t::Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMode followMode, std::vector<uint8_t> prologue, lm_module_t* module, bool optional)
 	:
 	name(name),
 	pattern(pattern),
 	followMode(followMode),
 	prologue(prologue),
+	optional(optional),
+	address(LM_ADDRESS_BAD),
 	module(module)
 {
 	Patterns::patterns.emplace_back(this);
@@ -28,7 +30,7 @@ Pattern_t::Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMod
 
 bool Pattern_t::find()
 {
-	address = MemHlp::searchSignature(name.c_str(), pattern.c_str(), module ? *module : g_modSteamClient , followMode, &prologue[0], prologue.size());
+	address = MemHlp::searchSignature(name.c_str(), pattern.c_str(), module ? *module : g_modSteamClient , followMode, prologue.data(), prologue.size());
 	return address != LM_ADDRESS_BAD;
 }
 
@@ -38,7 +40,7 @@ bool Patterns::init()
 
 	for(auto& pattern : patterns)
 	{
-		if (!pattern->find())
+		if (!pattern->find() && !pattern->optional)
 		{
 			found = false;
 		}
@@ -102,7 +104,9 @@ namespace Patterns
 		// sub esp,0xdc; spill arg3; read arg1->flags. The PIC thunk call and
 		// GOT displacement are wildcarded.
 		"E8 ? ? ? ? 05 ? ? ? ? 55 89 E5 57 56 53 81 EC DC 00 00 00 89 85 50 FF FF FF 8B 45 10 89 85 40 FF FF FF 8B 45 08 8B 40 04",
-		SigFollowMode::None
+		SigFollowMode::None,
+		nullptr,
+		true
 	};
 
 	Pattern_t TraceIPC
@@ -255,6 +259,22 @@ namespace Patterns
 			"E8 ? ? ? ? 8B 85 ? ? ? ? 83 C4 10 3D 6E E8 2F 87",
 			SigFollowMode::PrologueUpwards,
 			std::vector<uint8_t> { 0x56, 0x57, 0xe5, 0x89, 0x55 }
+		};
+	}
+
+	namespace CAutoCloudManager
+	{
+		Pattern_t StartSync
+		{
+			"CAutoCloudManager::StartSync (RE semantic name)",
+			// Entry pattern for the CAutoCloudManager routine that logs
+			// "[AppID %u] Starting sync (%s)". CAutoCloudManager is present in
+			// RTTI strings, but no exported/debug symbol names this exact routine.
+			// PIC thunk call and ADD GOT are wildcarded; pattern starts at function entry.
+			"55 89 E5 57 E8 ? ? ? ? 81 C7 ? ? ? ? 56 53 81 EC 14 01 00 00 8B 75 08",
+			SigFollowMode::None,
+			nullptr,
+			true
 		};
 	}
 

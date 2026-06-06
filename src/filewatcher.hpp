@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pthread.h>
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -10,11 +11,15 @@ typedef void(*FileModifyEvent_t)(const std::string& path, uint32_t mask);
 
 class CFileWatcher
 {
-	pthread_t watchThread;
+	friend void* watchLoop(void* args);
+
+	pthread_t watchThread {};
+	std::atomic_bool running {false};
+	bool started = false;
 
 public:
-	int notifyFd;
-	std::unordered_map<int, const char*> fileFdMap;
+	int notifyFd = -1;
+	std::unordered_map<int, std::string> fileFdMap;
 
 	FileModifyEvent_t onModify;
 

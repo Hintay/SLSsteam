@@ -125,14 +125,26 @@ static bool markAndProcess()
 {
     void* cuser = g_cuser.load(std::memory_order_acquire);
     if (!cuser || !Hooks::oMarkLicenseAsChanged || !Hooks::oProcessPendingLicenseUpdates)
+    {
+        g_pLog->warn("Package: markAndProcess missing deps cuser=%p mark=%p process=%p\n",
+            cuser,
+            reinterpret_cast<void*>(Hooks::oMarkLicenseAsChanged),
+            reinterpret_cast<void*>(Hooks::oProcessPendingLicenseUpdates));
         return false;
-	// §8 (proven 2026-06-03 Task 8): Mark/Process mutate the CUser license table
-	// that Steam's own threads walk. Doing this from the foreign FileWatcher thread
-	// corrupted Steam and crashed the IPC thread (SIGSEGV). Both injection paths now
-	// run on a Steam thread via pumpOnSteamThread. The PackageInjection config gate
-	// remains the kill switch.
+    }
+    // §8 (proven 2026-06-03 Task 8): Mark/Process mutate the CUser license table
+    // that Steam's own threads walk. Doing this from the foreign FileWatcher thread
+    // corrupted Steam and crashed the IPC thread (SIGSEGV). Both injection paths now
+    // run on a Steam thread via pumpOnSteamThread. The PackageInjection config gate
+    // remains the kill switch.
     Hooks::oMarkLicenseAsChanged(cuser, 0 /*pkgId*/, 1 /*bChanged*/);
-    Hooks::oProcessPendingLicenseUpdates(cuser);
+    // ProcessPendingLicenseUpdates' own return value is logged for diagnosis only.
+    // It must NOT gate downstream UI/diag work: once the license is Marked and the
+    // update pump has run with deps ready, the change is considered applied. The
+    // return contract here is "did we run Mark/Process" (deps were ready), matching
+    // the "deps not ready" warnings at the call sites.
+    const bool processResult = Hooks::oProcessPendingLicenseUpdates(cuser);
+    g_pLog->debug("Package: ProcessPendingLicenseUpdates -> %i\n", processResult);
     return true;
 }
 

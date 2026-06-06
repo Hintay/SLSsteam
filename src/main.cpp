@@ -67,6 +67,8 @@ static bool cleanEnvVar(const char* varName, const char* endsWith)
 //__attribute__((noreturn))
 static void unload()
 {
+	SLSAPI::shutdown();
+	g_config.shutdown();
 	Hooks::remove();
 
 	//This is absolutely unnessecary for applications loading SLSsteam where it cancels from setup()
@@ -249,4 +251,11 @@ unsigned int la_objopen(struct link_map *map, __attribute__((unused)) Lmid_t lmi
 void la_preinit(__attribute__((unused)) uintptr_t *cookie)
 {
 	setup();
+}
+
+__attribute__((destructor))
+static void shutdown()
+{
+	SLSAPI::shutdown();
+	g_config.shutdown();
 }

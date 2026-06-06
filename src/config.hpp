@@ -106,6 +106,7 @@ public:
 	std::string getPath();
 	bool createFile();
 	bool init();
+	void shutdown();
 
 	void setError(ELoadError err);
 	bool loadSettings();

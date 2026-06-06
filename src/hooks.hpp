@@ -146,6 +146,11 @@ namespace Hooks
 	extern DetourHook<BuildDepotDependency_t> BuildDepotDependency;
 	extern DetourHook<BUpdateAppDownloadPlan_t> BUpdateAppDownloadPlan;
 
+	// Internal CAutoCloudManager routine found manually via PIC GOTOFF string anchors.
+	// StartSync is an RE semantic name; no exported/debug symbol was found.
+	typedef uint32_t(*CAutoCloudManager_StartSync_t)(void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+	extern DetourHook<CAutoCloudManager_StartSync_t> CAutoCloudManager_StartSync;
+
 	extern DetourHook<CAPIJob_GetPlayerStats_t> CAPIJob_GetPlayerStats;
 
 	extern DetourHook<CProtoBufMsgBase_InitFromPacket_t> CProtoBufMsgBase_InitFromPacket;

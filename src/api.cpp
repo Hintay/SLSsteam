@@ -14,6 +14,7 @@
 #include <cstring>
 #include <deque>
 #include <ios>
+#include <memory>
 #include <mutex>
 
 
@@ -44,7 +45,7 @@ namespace SLSAPI
 
 	const char* path = "/tmp/SLSsteam.API";
 	std::fstream fstream;
-	CFileWatcher* watcher;
+	std::unique_ptr<CFileWatcher> watcher;
 
 	std::atomic_bool hasPendingInstalls = false;
 	std::atomic<uint64_t> nextPumpAtMs = 0;
@@ -332,11 +333,25 @@ void SLSAPI::runPendingInstallsOnAppManagerFrame()
 
 void SLSAPI::init()
 {
+	if (watcher)
+	{
+		return;
+	}
+
 	fstream = std::fstream(path, std::ios::in | std::ios::out);
 
-	watcher = new CFileWatcher(onFileChange);
+	watcher = std::make_unique<CFileWatcher>(onFileChange);
 	watcher->addFile(path);
 	watcher->start();
 
 	g_pLog->debug("SLSsteam API initialized!\n");
+}
+
+void SLSAPI::shutdown()
+{
+	watcher.reset();
+	if (fstream.is_open())
+	{
+		fstream.close();
+	}
 }

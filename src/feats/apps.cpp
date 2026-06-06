@@ -44,11 +44,12 @@ bool Apps::shouldTreatAsFakeOwned(uint32_t appId)
 
 bool Apps::isGenuinelySubscribed(uint32_t appId)
 {
-	// CUser::isSubscribed can observe package-injected ownership. For controlled
-	// apps, trust only the genuine-owned cache populated before spoofing.
-	if (shouldTreatAsFakeOwned(appId))
+	// CUser::isSubscribed can observe package-injected ownership for currently
+	// controlled apps, so trust only the genuine-owned cache populated from
+	// Steam's original ownership path while SLS is controlling the app.
+	if (Ownership::isControlledApp(appId))
 	{
-		return false;
+		return Ownership::isGenuinelyOwned(appId);
 	}
 
 	auto* user = g_pSteamEngine ? g_pSteamEngine->getUser(0) : nullptr;

@@ -15,12 +15,13 @@ public:
 	const std::string pattern;
 	const MemHlp::SigFollowMode followMode;
 	std::vector<uint8_t> prologue;
+	const bool optional;
 
 	lm_address_t address;
 	lm_module_t* module;
 
-	Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMode followMode, lm_module_t* module = nullptr);
-	Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMode followMode, std::vector<uint8_t> prologue, lm_module_t* module = nullptr);
+	Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMode followMode, lm_module_t* module = nullptr, bool optional = false);
+	Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMode followMode, std::vector<uint8_t> prologue, lm_module_t* module = nullptr, bool optional = false);
 	//~CPattern();
 
 	bool find();
@@ -87,6 +88,11 @@ namespace Patterns
 	namespace IClientRemoteStorage
 	{
 		extern Pattern_t RunIPCFrame;
+	}
+
+	namespace CAutoCloudManager
+	{
+		extern Pattern_t StartSync;
 	}
 
 	namespace IClientUser

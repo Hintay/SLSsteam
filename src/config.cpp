@@ -110,12 +110,17 @@ bool CConfig::init()
 
 CConfig::~CConfig()
 {
+	shutdown();
+}
+
+void CConfig::shutdown()
+{
 	if (watcher)
 	{
 		delete watcher;
+		watcher = nullptr;
 	}
 }
-
 
 void CConfig::setError(ELoadError err)
 {
@@ -186,18 +191,32 @@ bool CConfig::loadSettings()
 	g_pLog->info("LogLevel: %i\n", logLevel.get());
 
 	appIds = getList<uint32_t>(node, "AppIds");
-	addedAppIds = getList<uint32_t>(node, "AdditionalApps");
 	fakeOffline = getList<uint32_t>(node, "FakeOffline");
 
 	fakeAppIds = getMap<uint32_t, uint32_t>(node, "FakeAppIds");
-	appTokens = getMap<uint32_t, uint64_t>(node, "AppTokens");
 	gameTitles = getMap<uint32_t, std::string>(node, "GameTitles");
 	subscriptionTimestamps = getMap<uint32_t, uint32_t>(node, "SubscriptionTimestamps");
 
-	// Remember the yaml-origin sets so reconcileIntoConfig can recompute against
-	// the live lua tables (supports lua hot-removal, not just union add).
-	yamlAddedAppIds = addedAppIds.get();
-	yamlAppTokens   = appTokens.get();
+	// AdditionalApps + AppTokens carry a yaml baseline that reconcileIntoConfig()
+	// unions the live lua tables onto. Parse them into locals and record the yaml
+	// baseline first (supports lua hot-removal, not just union add).
+	const auto yamlAdditional = getList<uint32_t>(node, "AdditionalApps");
+	const auto yamlTokens     = getMap<uint32_t, uint64_t>(node, "AppTokens");
+	yamlAddedAppIds = yamlAdditional;
+	yamlAppTokens   = yamlTokens;
+
+	// Atomic-replace guard for the FileWatcher hot-reload window: when reconcile runs
+	// (queueLiveAppIdChanges) it performs the single locked addedAppIds/appTokens =
+	// yaml ∪ lua write below, so the live sets transition old→new in one step and are
+	// never transiently narrowed to the yaml-only subset. A narrowed set would briefly
+	// drop lua addappid ids, flipping isControlledApp and thus per-app cloud/ownership
+	// decisions mid-reload. On initial load (lua not up yet, reconcile gated off)
+	// assign the yaml set directly.
+	if (!queueLiveAppIdChanges)
+	{
+		addedAppIds = yamlAdditional;
+		appTokens   = yamlTokens;
+	}
 
 	//Do not warn for these (yet?)
 	const auto idleStatusNode = node["IdleStatus"];
@@ -425,10 +444,12 @@ bool CConfig::loadSettings()
 			break;
 	}
 
-	// Re-apply the lua union after the yaml fields (addedAppIds/appTokens) were
-	// overwritten wholesale above. This matters on FileWatcher hot-reload, where
-	// loadSettings() re-runs but LuaLoader::init() does NOT — without this, lua-only
-	// appIds would vanish from g_config until a restart.
+	// Perform the single atomic addedAppIds/appTokens = yaml ∪ lua write. This matters
+	// on FileWatcher hot-reload, where loadSettings() re-runs but LuaLoader::init()
+	// does NOT — without this, lua-only appIds would vanish from g_config until a
+	// restart. The yaml baseline was parsed into yamlAddedAppIds/yamlAppTokens above
+	// but the live sets were intentionally NOT narrowed to it (see the atomic-replace
+	// guard), so on hot-reload this update is the sole writer of the live sets.
 	//
 	// Gate on initDone(): before init() finishes its tables are empty (so this was
 	// a no-op anyway) AND being written on the load thread, so a FileWatcher

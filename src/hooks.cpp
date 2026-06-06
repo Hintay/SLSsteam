@@ -920,6 +920,7 @@ static void hkClientApps_RunIPCFrame(void* pClientApps, void* a1, void* a2, void
 static bool hkClientRemoteStorage_IsCloudEnabledForApp(void* pClientRemoteStorage, uint32_t appId)
 {
 	const bool enabled = Hooks::IClientRemoteStorage_IsCloudEnabledForApp.originalFn.fn(pClientRemoteStorage, appId);
+	const bool disable = Apps::shouldDisableCloud(appId);
 	g_pLog->once
 	(
 		"%s(%p, %u) -> %i\n",
@@ -930,13 +931,55 @@ static bool hkClientRemoteStorage_IsCloudEnabledForApp(void* pClientRemoteStorag
 		enabled
 	);
 
-	if (Apps::shouldDisableCloud(appId))
+	if (disable)
 	{
 		g_pLog->once("Disabled cloud for %u\n", appId);
 		return false;
 	}
 
 	return enabled;
+}
+
+static bool isControlledCloudAppId(uint32_t appId)
+{
+	return appId && Ownership::isControlledApp(appId);
+}
+
+static bool shouldOverrideCloudSyncState(uint32_t appId)
+{
+	return isControlledCloudAppId(appId) && Apps::shouldDisableCloud(appId);
+}
+
+static uint32_t readCAutoCloudManagerContextAppId(void* pContext)
+{
+	if (!pContext)
+	{
+		return 0;
+	}
+
+	// Manual RE: CAutoCloudManager start-sync routine logs app id from context + 0x170.
+	// "StartSync" is a semantic name; no exported/debug symbol was found.
+	uint32_t appId = 0;
+	std::memcpy(&appId, static_cast<const char*>(pContext) + 0x170, sizeof(appId));
+	return appId;
+}
+
+static bool g_cAutoCloudManagerStartSyncReady = false;
+static bool g_bUpdateAppDownloadPlanReady = false;
+
+static uint32_t hkCAutoCloudManager_StartSync(void* pContext, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5)
+{
+	const uint32_t appId = readCAutoCloudManagerContextAppId(pContext);
+	if (shouldOverrideCloudSyncState(appId))
+	{
+		g_pLog->once("Disabled AutoCloud sync for %u\n", appId);
+		return 1;
+	}
+
+	// Passthrough: app is not a controlled+cloud-disabled app, so run the original.
+	// The override above returns 1 (== ERESULT_OK), confirmed on-device as the genuine
+	// success sentinel this routine returns.
+	return Hooks::CAutoCloudManager_StartSync.tramp.fn(pContext, a1, a2, a3, a4, a5);
 }
 
 static void hkClientRemoteStorage_RunIPCFrame(void* pClientRemoteStorage, void* a1, void* a2, void* a3)
@@ -949,6 +992,7 @@ static void hkClientRemoteStorage_RunIPCFrame(void* pClientRemoteStorage, void* 
 		LM_VmtNew(*reinterpret_cast<lm_address_t**>(pClientRemoteStorage), vft.get());
 
 		Hooks::IClientRemoteStorage_IsCloudEnabledForApp.setup(vft, VFTIndexes::IClientRemoteStorage::IsCloudEnabledForApp, hkClientRemoteStorage_IsCloudEnabledForApp);
+
 		Hooks::IClientRemoteStorage_IsCloudEnabledForApp.place();
 
 		g_pLog->debug("IClientRemoteStorage->vft at %p\n", vft->vtable);
@@ -1417,6 +1461,7 @@ namespace Hooks
 	DetourHook<LoadDepotDecryptionKey_t> LoadDepotDecryptionKey;
 	DetourHook<BuildDepotDependency_t> BuildDepotDependency;
 	DetourHook<BUpdateAppDownloadPlan_t> BUpdateAppDownloadPlan;
+	DetourHook<CAutoCloudManager_StartSync_t> CAutoCloudManager_StartSync;
 
 	DetourHook<CAPIJob_GetPlayerStats_t> CAPIJob_GetPlayerStats;
 
@@ -1490,7 +1535,6 @@ bool Hooks::setup()
 
 		&& LoadDepotDecryptionKey.setup(Patterns::LoadDepotDecryptionKey, &hkLoadDepotDecryptionKey)
 		&& BuildDepotDependency.setup(Patterns::BuildDepotDependency, &hkBuildDepotDependency)
-		&& BUpdateAppDownloadPlan.setup(Patterns::BUpdateAppDownloadPlan, &hkBUpdateAppDownloadPlan)
 
 		&& CAPIJob_GetPlayerStats.setup(Patterns::CAPIJob::GetPlayerStats, &hkCAPIJob_GetPlayerStats)
 
@@ -1533,7 +1577,26 @@ bool Hooks::setup()
 
 		&& ISteamMatchmakingPingResponse_ServerResponded.setup(Patterns::ISteamMatchmakingPingResponse::ServerResponded, hkSteamMatchmakingPingResponse_ServerResponded);
 
+	g_bUpdateAppDownloadPlanReady = BUpdateAppDownloadPlan.setup(Patterns::BUpdateAppDownloadPlan, &hkBUpdateAppDownloadPlan);
+	g_cAutoCloudManagerStartSyncReady = CAutoCloudManager_StartSync.setup(Patterns::CAutoCloudManager::StartSync, &hkCAutoCloudManager_StartSync);
+
+	g_pLog->debug
+	(
+		"BUpdateAppDownloadPlan hook: ready=%i\n",
+		g_bUpdateAppDownloadPlanReady
+	);
+	g_pLog->debug
+	(
+		"CAutoCloudManager start-sync hook: ready=%i\n",
+		g_cAutoCloudManagerStartSyncReady
+	);
+
 	LuaLoader::setOnDepotsChanged(&Package::notifyLicenseChanged);
+
+	if (!succeeded)
+	{
+		return false;
+	}
 
 	Hooks::place();
 	//This is unnecessary but I'll keep this for now in case I wanna improve error checks
@@ -1553,7 +1616,14 @@ void Hooks::place()
 
 	LoadDepotDecryptionKey.place();
 	BuildDepotDependency.place();
-	BUpdateAppDownloadPlan.place();
+	if (g_bUpdateAppDownloadPlanReady)
+	{
+		BUpdateAppDownloadPlan.place();
+	}
+	if (g_cAutoCloudManagerStartSyncReady)
+	{
+		CAutoCloudManager_StartSync.place();
+	}
 
 	CAPIJob_GetPlayerStats.place();
 
@@ -1605,7 +1675,14 @@ void Hooks::remove()
 
 	LoadDepotDecryptionKey.remove();
 	BuildDepotDependency.remove();
-	BUpdateAppDownloadPlan.remove();
+	if (g_bUpdateAppDownloadPlanReady)
+	{
+		BUpdateAppDownloadPlan.remove();
+	}
+	if (g_cAutoCloudManagerStartSyncReady)
+	{
+		CAutoCloudManager_StartSync.remove();
+	}
 
 	CAPIJob_GetPlayerStats.remove();
 
