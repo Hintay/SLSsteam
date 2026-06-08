@@ -2,6 +2,7 @@
 
 #include "apps.hpp"
 
+#include "../config.hpp"
 #include "../sdk/CProtoBufMsgBase.hpp"   // EMsgType enum + CMsgProtoBufHeader
 #include "../sdk/EResult.hpp"
 #include "../sdk/RawNetPacket.hpp"
@@ -32,12 +33,14 @@
 //   incoming CCMConnection::RecvPkt(CNetPacket*)
 //
 // For added (lua/config) apps that are not genuinely owned, the outgoing query's
-// steamid is rewritten to a donor (so the server returns a valid OK response with
-// the achievement schema), and the response's stat values are then cleared (Steam
-// keeps the schema but falls back to its local cache). Redirect only controlled
-// apps that have not been proven genuinely owned by Steam's original ownership
-// path. Do not use CUser::isSubscribed() here: package injection can make fake
-// ownership look subscribed and would exclude exactly the apps that need redirecting.
+// steamid is rewritten to a donor so the server returns a valid schema; incoming
+// stat values are then cleared so Steam keeps the schema but falls back to local
+// cache. sha_schema probes default to OpenSteamTool behavior (send unchanged);
+// AchievementsSchemaProbeNoConnection restores the older drop+fabricated
+// no-connection path for A/B testing. Redirect only controlled apps that have not
+// been proven genuinely owned by Steam's original ownership path. Do not use
+// CUser::isSubscribed() here: package injection can make fake ownership look
+// subscribed and would exclude exactly the apps that need redirecting.
 
 namespace Achievements
 {
@@ -53,22 +56,21 @@ namespace Achievements
 			std::chrono::steady_clock::time_point lastTouched;
 		};
 
-		// jobid_source (outgoing 151) -> appId. Touched from the send hook and the
-		// recv hook; guard with g_mutex. The atomics are lock-free fast-path gates for
-		// the recv hook (runs on every incoming packet); only written under g_mutex.
-		std::unordered_map<uint64_t, uint32_t> g_pending;
-		std::unordered_map<uint32_t, LegacyPending> g_legacyPending;
-		std::mutex          g_mutex;
-		std::atomic<size_t> g_pendingCount{0};
-		std::atomic<size_t> g_legacyPendingCount{0};
-
 		struct SchemaFailureResponse {
 			uint64_t jobId = 0;
 			uint32_t appId = 0;
 			std::vector<uint8_t> packet;
 		};
 
+		// jobid_source (outgoing 151) -> appId. Touched from the send hook and the
+		// recv hook; guard with g_mutex. The atomics are lock-free fast-path gates for
+		// the recv hook (runs on every incoming packet); only written under g_mutex.
+		std::unordered_map<uint64_t, uint32_t> g_pending;
+		std::unordered_map<uint32_t, LegacyPending> g_legacyPending;
 		std::deque<SchemaFailureResponse> g_schemaFailures;
+		std::mutex          g_mutex;
+		std::atomic<size_t> g_pendingCount{0};
+		std::atomic<size_t> g_legacyPendingCount{0};
 		std::atomic<size_t> g_schemaFailureCount{0};
 
 		// Fabricated injection bytes are moved here so nextInjection's output remains
@@ -202,6 +204,7 @@ namespace Achievements
 			publishCountsLocked();
 			return true;
 		}
+
 	}
 
 	bool onSendFrame(const uint8_t* pubData, uint32_t cubData,
@@ -226,17 +229,22 @@ namespace Achievements
 			const uint32_t appId = req.appid();
 			if (req.has_sha_schema())
 			{
+				if (!g_config.achievementsSchemaProbeNoConnection.get())
+				{
+					g_pLog->debug("Achievements: raw 151 schema probe app=%u sha_schema_len=%zu, not spoofing\n",
+					              appId, req.sha_schema().size());
+					return false;
+				}
+
 				if (!shouldRedirectStats(appId)) return false;
 				if (!hdr.has_jobid_source()) return false;
 
 				const uint64_t jobId = hdr.jobid_source();
 				if (!queueSchemaFailure(appId, jobId, hdr))
 				{
-					g_pLog->warn("Achievements: failed to queue raw 151 schema no-connection app=%u (jobid=%llu), dropping anyway\n",
+					g_pLog->warn("Achievements: failed to queue raw 151 schema no-connection app=%u (jobid=%llu), passing through\n",
 					             appId, static_cast<unsigned long long>(jobId));
-					outData = nullptr;
-					outSize = 0;
-					return true;
+					return false;
 				}
 
 				outData = nullptr;
@@ -270,8 +278,8 @@ namespace Achievements
 			}
 
 			addServicePending(jobId, appId);
-			g_pLog->debug("Achievements: raw 151 redirect app=%u steamid=%llu (jobid=%llu)\n",
-			              appId, static_cast<unsigned long long>(donor), static_cast<unsigned long long>(jobId));
+			g_pLog->debug("Achievements: raw 151 redirect app=%u using donor steamid (jobid=%llu)\n",
+			              appId, static_cast<unsigned long long>(jobId));
 			return true;
 		}
 
@@ -305,8 +313,7 @@ namespace Achievements
 			}
 
 			addLegacyPending(appId);
-			g_pLog->debug("Achievements: raw 818 redirect app=%u steamid=%llu\n",
-			              appId, static_cast<unsigned long long>(donor));
+			g_pLog->debug("Achievements: raw 818 redirect app=%u using donor steamid\n", appId);
 			return true;
 		}
 

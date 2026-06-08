@@ -74,6 +74,7 @@ public:
 	MTVariable<bool> notifyInit;
 	MTVariable<bool> api;
 	MTVariable<bool> disableCloud;
+	MTVariable<bool> achievementsSchemaProbeNoConnection;
 	MTVariable<std::string> fakeEmail;
 	MTVariable<int32_t> fakeWalletBalance;
 	MTVariable<unsigned int> logLevel;

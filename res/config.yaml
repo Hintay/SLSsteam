@@ -89,6 +89,11 @@ API: no
 #Disable cloud saves for unlocked games. Set to "no" if using CloudRedirect or similar.
 DisableCloud: yes
 
+#For Player.GetUserStats schema probes with sha_schema, default to OpenSteamTool
+#behavior: send the original request unchanged. Set to "yes" to drop those probes
+#for fake-owned apps and inject a fabricated no-connection response instead.
+AchievementsSchemaProbeNoConnection: no
+
 #Inject added apps into Steam's live package table (pkg0) and re-evaluate licenses
 #without a restart, so deeper Steam subsystems also treat them as owned and runtime
 #lua changes apply live. Set to "no" to use only the lighter getSubscribedApps path.

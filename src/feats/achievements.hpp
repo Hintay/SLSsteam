@@ -10,11 +10,13 @@ namespace Achievements
 	// Player.GetUserStats#1 ServiceMethod call (EMsg 151) or a legacy
 	// CMsgClientGetUserStats (EMsg 818) of a redirected app, rewrite the donor
 	// steamid into the request and (151) track jobid_source -> appId. For a 151
-	// schema probe (has sha_schema), queue a fabricated no-connection response and
-	// return true with outData=nullptr/outSize=0 so the caller drops the frame.
-	// If the frame must be re-sent modified, returns true and points outData/outSize
-	// at a thread-local replacement packet; the caller sends that instead. Returns
-	// false to send the original frame unchanged.
+	// schema probe (has sha_schema), default to OpenSteamTool behavior: return false
+	// so the raw hook sends the original packet unchanged. If
+	// AchievementsSchemaProbeNoConnection is enabled, drops the probe and later
+	// injects a fabricated no-connection response. If the frame must be re-sent
+	// modified, returns true and points outData/outSize at a thread-local replacement
+	// packet; the caller sends that instead. Returns false when achievements does not
+	// handle the frame.
 	//
 	// The ServiceMethod (151) path provably does NOT traverse CProtoBufMsgBase::Send
 	// on modern Steam, so it MUST be intercepted here at the raw packet layer (same
@@ -22,10 +24,9 @@ namespace Achievements
 	bool onSendFrame(const uint8_t* pubData, uint32_t cubData,
 	                 const uint8_t*& outData, uint32_t& outSize);
 
-	// Called from hkCCMConnection_RecvPkt before the real packet is delivered. If a
-	// schema probe was dropped on the send path, returns a fabricated ServiceMethod
-	// no-connection response that the caller should inject using the current packet as
-	// a carrier. Returned bytes are valid until the next call on the same thread.
+	// Called from hkCCMConnection_RecvPkt before the real packet is delivered. When
+	// AchievementsSchemaProbeNoConnection is enabled and a schema probe was dropped,
+	// returns the fabricated no-connection response to inject.
 	bool nextInjection(const uint8_t*& outData, uint32_t& outSize);
 
 	// Raw incoming hook (from hkCCMConnection_RecvPkt). For a matching
