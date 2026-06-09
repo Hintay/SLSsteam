@@ -85,6 +85,18 @@ bool findAndFastRemove(CUtlVector<uint32_t>* vec, uint32_t appId)
     return false;
 }
 
+// Presence check (no mutation). Used on the live hot-reload path to leave already-injected
+// apps untouched instead of remove+re-append: churning an app's pkg0 membership makes the
+// following markAndProcess re-evaluate its cloud state, which paints the transient "Steam
+// Cloud out of date" badge on apps the user has played. Already present == no change.
+static bool containsAppId(CUtlVector<uint32_t>* vec, uint32_t appId)
+{
+    if (!vec || !vec->m_Memory.m_pMemory) return false;
+    for (int32_t i = 0; i < vec->m_Size; ++i)
+        if (vec->m_Memory.m_pMemory[i] == appId) return true;
+    return false;
+}
+
 // Append into spare capacity; if full, grow via Steam's CUtlMemory::Grow then retry.
 // Caller holds g_injectMtx. Returns false only if grow is unavailable or still fails.
 static bool appendAppIdGrowing(CUtlVector<uint32_t>* vec, uint32_t appId)
@@ -212,7 +224,12 @@ static void applyPendingChanges()
         }
         for (uint32_t id : additions) {
             if (!Ownership::isControlledApp(id)) continue;
-            findAndFastRemove(vec, id);                 // drop any existing copy first (de-dup, matches tryInit)
+            // Already injected? Leave it. A hot-reload re-queues the whole lua set (mostly
+            // already-present apps); remove+re-appending them churns their license membership
+            // so markAndProcess re-evaluates their cloud state and paints the transient
+            // "Steam Cloud out of date" badge on played apps. Only genuinely-new apps are a
+            // real change and need marking. (Skipping also keeps the vec de-duped.)
+            if (containsAppId(vec, id)) continue;
             if (appendAppIdGrowing(vec, id)) ++changed;
         }
     }
@@ -224,7 +241,7 @@ static void applyPendingChanges()
     if (changed) {
         processed = markAndProcess();
         if (!processed) g_pLog->warn("Package: markAndProcess skipped on live change (deps not ready)\n");
-        g_pLog->info("Package: live license change applied (%zu)\n", changed);
+        g_pLog->info("Package: live license change applied (%zu genuinely new/removed)\n", changed);
     }
     if (processed)
         for (uint32_t id : removed) SteamUI::removeAppAndSendChange(id);

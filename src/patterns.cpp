@@ -262,22 +262,6 @@ namespace Patterns
 		};
 	}
 
-	namespace CAutoCloudManager
-	{
-		Pattern_t StartSync
-		{
-			"CAutoCloudManager::StartSync (RE semantic name)",
-			// Entry pattern for the CAutoCloudManager routine that logs
-			// "[AppID %u] Starting sync (%s)". CAutoCloudManager is present in
-			// RTTI strings, but no exported/debug symbol names this exact routine.
-			// PIC thunk call and ADD GOT are wildcarded; pattern starts at function entry.
-			"55 89 E5 57 E8 ? ? ? ? 81 C7 ? ? ? ? 56 53 81 EC 14 01 00 00 8B 75 08",
-			SigFollowMode::None,
-			nullptr,
-			true
-		};
-	}
-
 	namespace IClientUser
 	{
 		Pattern_t RunIPCFrame
@@ -392,6 +376,53 @@ namespace Patterns
 			// See docs/superpowers/notes/ost-linux-appinfo-cache-hooks.md.
 			"E8 ? ? ? ? 05 ? ? ? ? 55 89 E5 57 56 53 83 EC 2C 8B 75 0C 8B 7D 10 89 45 D0 8B 80 B0 08 00 00",
 			MemHlp::SigFollowMode::None
+		};
+	}
+
+	namespace CConfigStore
+	{
+		Pattern_t SharedConfigWriteCallsite
+		{
+			"CConfigStore::FlushToDisk sharedconfig write callsite",
+			// Store-2 sharedconfig.vdf branch. The indirect call at the end is intentionally
+			// not hooked (Frida proved mid-call instrumentation crashes Steam); this anchor is
+			// only used to validate the return address from WriteVdfFile.
+			"8B 85 50 EF FF FF 83 C4 28 8B 80 50 3B 00 00 FF B5 9C EF FF FF FF B5 8C EF FF FF 53 6A 00 6A 07 FF B5 D4 EE FF FF FF 10 83 C4 20 83 F8 01",
+			MemHlp::SigFollowMode::None,
+			nullptr,
+			true
+		};
+
+		Pattern_t WriteVdfFile
+		{
+			"CConfigStore::WriteVdfFile",
+			// FileWrite-like function reached from FlushToDisk's sharedconfig write callsite.
+			// Runtime validation: arg4 is the serialized UserRoamingConfigStore buffer and
+			// arg5 its size; return address is the callsite+0x28 instruction after CALL [EAX].
+			"55 57 56 53 E8 ? ? ? ? 81 C3 ? ? ? ? 81 EC EC 00 00 00 65 8B 0D 14 00 00 00 89 8C 24 DC 00 00 00 31 C9 8B B4 24 14 01 00 00 8B 94 24 00 01 00 00 8B 84 24 0C 01 00 00",
+			MemHlp::SigFollowMode::None,
+			nullptr,
+			true
+		};
+	}
+
+	namespace IClientRemoteStorage
+	{
+		Pattern_t SetCloudEnabledForApp
+		{
+			"IClientRemoteStorage::SetCloudEnabledForApp (idx25 identity check)",
+			// Entry of the function the IClientRemoteStorage vtable[25] points to. Resolved at init only
+			// to VALIDATE that the live vtable[25] still holds this exact function before the badge fix
+			// calls it raw: a Steam-update VFT reorder makes vtable[25] != this address, so the call is
+			// skipped (safe degradation) instead of crashing on a wrong function. The PIC pc-thunk CALL
+			// rel32 and the following ADD EBX <GOT-imm32> are position-dependent and wildcarded; the
+			// frame size (SUB ESP,0x12c) and the three arg loads at [ESP+0x140/0x144/0x148] make it
+			// unique in steamclient (verified: single match at the function entry). Optional — if it
+			// ever fails to resolve, the hook falls back to a weaker in-module slot sanity check.
+			"55 57 56 53 E8 ? ? ? ? 81 C3 ? ? ? ? 81 EC 2C 01 00 00 8B 84 24 48 01 00 00 8B B4 24 44 01 00 00 8B AC 24 40 01 00 00",
+			MemHlp::SigFollowMode::None,
+			nullptr,
+			true
 		};
 	}
 

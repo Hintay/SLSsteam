@@ -45,12 +45,14 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <pthread.h>
 #include <strings.h>
 #include <unistd.h>
@@ -432,8 +434,10 @@ static bool hkCWebSocketConnection_BBuildAndAsyncSendFrame(void* pThis, int opco
 		if (drop)
 			return true;
 
-		// achievements: returns true to REPLACE a Player.GetUserStats query with one
-		// whose steamid is redirected to a donor — send the rewritten packet instead.
+		// achievements: returns true only when it supplies a replacement packet. False
+		// means achievements did not handle the frame; the fallback below sends the
+		// original packet unchanged. Schema sha probes intentionally use that fallback
+		// to match OpenSteamTool.
 		const uint8_t* newData = nullptr;
 		uint32_t newSize = 0;
 		bool replace = false;
@@ -441,8 +445,6 @@ static bool hkCWebSocketConnection_BBuildAndAsyncSendFrame(void* pThis, int opco
 		catch (...) { replace = false; }
 		if (replace)
 		{
-			// Schema sha probes are intentionally dropped; Achievements will inject a
-			// fabricated no-connection response on the recv path.
 			if (!newData || !newSize)
 				return true;
 			return Hooks::CWebSocketConnection_BBuildAndAsyncSendFrame.tramp.fn(pThis, opcode, const_cast<uint8_t*>(newData), newSize);
@@ -917,6 +919,232 @@ static void hkClientApps_RunIPCFrame(void* pClientApps, void* a1, void* a2, void
 	Hooks::IClientApps_RunIPCFrame.tramp.fn(pClientApps, a1, a2, a3);
 }
 
+// ---- Zero-persist: strip controlled apps' cloudenabled from the cloud-synced sharedconfig.vdf ----
+// SetCloudEnabledForApp must write cloudenabled into the roaming config store's KeyValues for the
+// badge fix to work (the AutoCloud re-eval tree-walks the store). That store later serializes to
+// userdata/<id>/7/remote/sharedconfig.vdf. We keep the in-memory store intact (badge stays fixed),
+// but remove SLS-written cloudenabled blocks at the write boundary by filtering the serialized
+// UserRoamingConfigStore buffer before Steam writes it.
+
+// The exact set of appIds SLSsteam has written via SetCloudEnabledForApp this session. This is the
+// authoritative "what we wrote" list used by the strip — far safer than re-deriving ownership at
+// strip time (which races the genuine-ownership cache and would wrongly drop user toggles of owned
+// games). The set is intentionally session-lifetime: once SLS has injected a cloudenabled=false
+// value, later flushes keep stripping that SLS-origin value until Steam restarts.
+static std::mutex                  g_cloudWroteMtx;
+static std::unordered_set<uint32_t> g_cloudWroteApps;
+
+// Set once when the IClientRemoteStorage vtable is first seen: true iff vtable[idx25] is a plausible
+// steamclient code pointer, i.e. the SetCloudEnabledForApp slot looks intact. Gates the raw idx25
+// call below so a Steam-update VFT drift degrades the badge fix instead of crashing on a bad call.
+static bool g_bCloudSetSlotValid = false;
+
+// Snapshot the controlled-app set under a single lock. The strip tests membership against this local
+// copy instead of locking per app-id line, and short-circuits the whole parse when the set is empty.
+static std::unordered_set<uint32_t> snapshotCloudWroteApps()
+{
+	std::lock_guard<std::mutex> lk(g_cloudWroteMtx);
+	return g_cloudWroteApps;
+}
+
+// --- offset-based VDF line helpers (operate directly on the serialized buffer, no allocation) ---
+static size_t vdfLineEnd(const char* buf, size_t size, size_t s)
+{
+	while (s < size && buf[s] != '\n') ++s;
+	return s;
+}
+// True if the line [s,e) is a single brace `br` (only whitespace around it).
+static bool vdfLineIsBrace(const char* buf, size_t s, size_t e, char br)
+{
+	size_t a = s;
+	while (a < e && (buf[a] == '\t' || buf[a] == ' ' || buf[a] == '\r')) ++a;
+	if (a >= e || buf[a] != br) return false;
+	++a;
+	while (a < e && (buf[a] == '\t' || buf[a] == ' ' || buf[a] == '\r')) ++a;
+	return a >= e;
+}
+// appId if the line [s,e) is a bare `\t*"<digits>"` key line (nothing else), else 0.
+static uint32_t vdfLineAppId(const char* buf, size_t s, size_t e)
+{
+	size_t i = s;
+	while (i < e && (buf[i] == '\t' || buf[i] == ' ')) ++i;
+	if (i >= e || buf[i] != '"') return 0;
+	++i;
+	// Parse the digit run with from_chars (the uint32 convention already used in this file, ~L305):
+	// it stops at the first non-digit and returns result_out_of_range for a >uint32 key, so an
+	// overflowing 11+/large numeric key becomes a non-match (emitted verbatim) instead of wrapping
+	// onto a real controlled appid.
+	const char* const digitsStart = buf + i;
+	uint32_t id = 0;
+	const auto [end, ec] = std::from_chars(digitsStart, buf + e, id);
+	if (ec != std::errc{} || end == digitsStart) return 0;
+	i = static_cast<size_t>(end - buf);
+	if (i >= e || buf[i] != '"') return 0;
+	++i;
+	while (i < e) { const char c = buf[i]; if (c != '\t' && c != ' ' && c != '\r') return 0; ++i; }
+	return id;
+}
+static bool vdfLineIsCloudenabledKey(const char* buf, size_t s, size_t e)
+{
+	size_t i = s;
+	while (i < e && (buf[i] == '\t' || buf[i] == ' ')) ++i;
+	if (i >= e || buf[i] != '"') return false;
+	++i;
+	constexpr std::string_view key = "cloudenabled";
+	if (e - i < key.size() + 1) return false;
+	if (std::string_view(buf + i, key.size()) != key) return false;
+	i += key.size();
+	return i < e && buf[i] == '"';
+}
+
+// Filter a serialized UserRoamingConfigStore VDF buffer: remove controlled apps' cloudenabled.
+// Brace-depth tracked, so an app block of any shape is handled (not just the 4-line cloudenabled-only
+// case): a controlled "<id>" block that contains ONLY cloudenabled is dropped whole (no leftover
+// appid in the cloud file); one that also has other keys keeps those, dropping only its cloudenabled
+// line(s). Output is built by appending kept byte-ranges of the original buffer into `out` (a reused
+// thread_local), so there is no per-line allocation. Returns true iff something was removed.
+static bool stripControlledCloudFromBuffer(const char* buf, size_t size, std::string& out)
+{
+	out.clear();
+	// Snapshot once: skip the entire parse when SLS has toggled nothing this session, and avoid
+	// re-locking g_cloudWroteMtx for every app-id line in the (potentially hundreds-of-apps) tree.
+	const std::unordered_set<uint32_t> wrote = snapshotCloudWroteApps();
+	if (wrote.empty()) return false;
+	bool changed = false;
+	size_t i = 0;
+	while (i < size)
+	{
+		const size_t s = i;
+		const size_t e = vdfLineEnd(buf, size, s);
+		const size_t next = (e < size) ? e + 1 : size;
+
+		// This outer scan is line-by-line, not depth-scoped to the apps map, so a "<digits>" key
+		// anywhere whose value is in `wrote` is a strip candidate. That stays safe because
+		// (a) vdfLineAppId rejects out-of-range/overflowing numeric keys, (b) `wrote` holds only real
+		// controlled appids, and (c) whole-block drop needs a cloudenabled-only block, which in a
+		// roaming store only occurs under Software\Valve\Steam\apps.
+		const uint32_t id = vdfLineAppId(buf, s, e);
+		if (id && wrote.count(id))
+		{
+			const size_t bs = next;                              // expected "{" line
+			const size_t be = vdfLineEnd(buf, size, bs);
+			if (bs < size && vdfLineIsBrace(buf, bs, be, '{'))
+			{
+				const size_t bodyStart = (be < size) ? be + 1 : size;
+				// Single pass: speculatively append the kept block (the "<id>" line, "{", every
+				// non-cloudenabled line, and all braces) into `out`, tracking whether the block has
+				// any non-cloudenabled content (hasOther) and whether a cloudenabled line was actually
+				// dropped (hadCloud). At the matching "}" decide: keep the speculative output, roll it
+				// back for a whole-block drop, or roll it back as malformed. `out.resize(mark)` only
+				// rewinds the length (capacity is kept), so a rollback costs nothing.
+				const size_t mark = out.size();
+				out.append(buf + s, next - s);          // "<id>"
+				out.append(buf + bs, bodyStart - bs);   // "{"
+				size_t depth = 1, p = bodyStart, blockEnd = 0;
+				bool hasOther = false, hadCloud = false, wellFormed = false;
+				while (p < size)
+				{
+					const size_t ls = p, le = vdfLineEnd(buf, size, ls);
+					const size_t ln = (le < size) ? le + 1 : size;
+					if (vdfLineIsBrace(buf, ls, le, '{')) { ++depth; out.append(buf + ls, ln - ls); }
+					else if (vdfLineIsBrace(buf, ls, le, '}'))
+					{
+						out.append(buf + ls, ln - ls);
+						if (--depth == 0) { blockEnd = ln; wellFormed = true; break; }
+					}
+					else if (vdfLineIsCloudenabledKey(buf, ls, le)) hadCloud = true;   // drop this line
+					else { hasOther = true; out.append(buf + ls, ln - ls); }
+					p = ln;
+				}
+				if (wellFormed)
+				{
+					if (!hasOther) { out.resize(mark); changed = true; }   // cloudenabled-only/empty -> drop whole block
+					else if (hadCloud) changed = true;                     // kept block, dropped its cloudenabled line(s)
+					// else: block had no cloudenabled to drop -> re-emitted byte-for-byte, no change
+					i = blockEnd;
+					continue;
+				}
+				out.resize(mark);   // malformed (no matching brace) -> roll back, emit the id line verbatim below
+			}
+		}
+		out.append(buf + s, next - s);
+		i = next;
+	}
+	return changed;
+}
+
+// The FlushToDisk sharedconfig callsite (return address == callsite + 0x28). Used ONLY as an extra
+// diagnostic signal — never as a hard gate (see hook): if this pattern shifts on a Steam update, the
+// strip must keep working off the buffer content, not silently switch off.
+static bool isSharedConfigWriteReturn(void* retAddr)
+{
+	if (Patterns::CConfigStore::SharedConfigWriteCallsite.address == LM_ADDRESS_BAD) return false;
+	return reinterpret_cast<lm_address_t>(retAddr) == Patterns::CConfigStore::SharedConfigWriteCallsite.address + 0x28;
+}
+
+static uint32_t hkCConfigStore_WriteVdfFile(void* a0, uint32_t a1, uint32_t a2, void* a3, const char* buffer, uint32_t size)
+{
+	// Primary gate is the buffer CONTENT: only the roaming store's serialized buffer carries the
+	// "UserRoamingConfigStore" root key, which version-robustly identifies the sharedconfig.vdf write.
+	// We deliberately do NOT gate on the FlushToDisk callsite — a Steam update shifting that pattern
+	// must not silently disable the strip (which would leak controlled apps to the cloud unnoticed).
+	// Size cap: a real serialized roaming config is well under this. If a Steam-update ABI drift makes
+	// (buffer,size) no longer describe this text buffer, an absurd `size` would make the content scan
+	// below read far out of bounds (-> crash); above the cap we can't trust the args, so pass through.
+	constexpr uint32_t kMaxRoamingConfigBytes = 64u * 1024u * 1024u;
+	if (buffer && size && size <= kMaxRoamingConfigBytes)
+	{
+		const std::string_view sv(buffer, size);
+		if (sv.find("\"UserRoamingConfigStore\"") != std::string_view::npos
+			&& sv.find("\"cloudenabled\"") != std::string_view::npos)
+		{
+			// Callsite is only a cross-check: if it resolved but the return address doesn't match, the
+			// roaming store is being written from an unexpected path — log once, but still filter.
+			if (Patterns::CConfigStore::SharedConfigWriteCallsite.address != LM_ADDRESS_BAD
+				&& !isSharedConfigWriteReturn(__builtin_return_address(0)))
+			{
+				g_pLog->once("Cloud-config strip: sharedconfig write from unexpected callsite; filtering on content\n");
+			}
+
+			try
+			{
+				static thread_local std::string stripped;
+				if (stripControlledCloudFromBuffer(buffer, size, stripped))
+				{
+					g_pLog->debug("Cloud-config strip: filtered sharedconfig write buffer (%u -> %zu bytes)\n", size, stripped.size());
+					return Hooks::CConfigStore_WriteVdfFile.tramp.fn(a0, a1, a2, a3, stripped.data(), static_cast<uint32_t>(stripped.size()));
+				}
+			}
+			catch (...)
+			{
+				// fall through to the unfiltered write
+			}
+		}
+	}
+
+	return Hooks::CConfigStore_WriteVdfFile.tramp.fn(a0, a1, a2, a3, buffer, size);
+}
+// Cheap sanity gate before a raw vtable[index] use: is `p` inside the steamclient module's mapped
+// range? Catches a vtable that was relocated/shrunk or a slot holding null/data on a Steam update
+// (-> skip + warn instead of crashing on the raw call). It does NOT catch a same-size method reorder
+// where the slot still holds a valid steamclient function — robustly detecting that needs a
+// function-signature pattern (RE loop), tracked as a follow-up.
+static bool isSteamClientCodePtr(const void* p)
+{
+	const lm_address_t a = reinterpret_cast<lm_address_t>(p);
+	return a != 0 && g_modSteamClient.base != 0
+	       && a >= g_modSteamClient.base && a < g_modSteamClient.base + g_modSteamClient.size;
+}
+
+// vtable[index] for an object, validated to be a plausible steamclient code pointer (else false).
+static bool isVFuncSlotSane(void* thisPtr, unsigned int index)
+{
+	if (!thisPtr) return false;
+	const lm_address_t* const vtable = *reinterpret_cast<const lm_address_t* const*>(thisPtr);
+	if (!isSteamClientCodePtr(vtable)) return false;
+	return isSteamClientCodePtr(reinterpret_cast<const void*>(vtable[index]));
+}
+
 static bool hkClientRemoteStorage_IsCloudEnabledForApp(void* pClientRemoteStorage, uint32_t appId)
 {
 	const bool enabled = Hooks::IClientRemoteStorage_IsCloudEnabledForApp.originalFn.fn(pClientRemoteStorage, appId);
@@ -933,6 +1161,36 @@ static bool hkClientRemoteStorage_IsCloudEnabledForApp(void* pClientRemoteStorag
 
 	if (disable)
 	{
+		// ROOT-CAUSE fix for the lua-hot-reload "Steam Cloud out of date" badge. The badge only
+		// appears after a hot-reload (markAndProcess re-stamps pkg0 -> AutoCloud re-evaluates every
+		// app). That re-eval reads the per-app cloudenabled value from the config store's KeyValues
+		// tree, so the value MUST be present in the store: SetCloudEnabledForApp(idx25)(false) writes
+		// it (and the in-memory map), and the re-eval then sees the app as cloud-disabled -> no badge.
+		// (Confirmed on device. Skipping the write, or intercepting the typed getter, both fail: the
+		// value really has to live in the store's tree, which the eval tree-walks.) The unavoidable
+		// downside is that the store flushes to the cloud-synced sharedconfig.vdf on save; that is
+		// neutralised by the CConfigStore::WriteVdfFile detour which filters the serialized buffer
+		// before Steam writes it.
+		// Do it once per app, recursion-safe (SetCloudEnabledForApp re-enters this getter). Record the
+		// appId in g_cloudWroteApps BEFORE the call so the flush strip knows this exact app's
+		// cloudenabled is ours to remove (and never touches genuine user toggles).
+		// Gate the raw idx25 call on the slot-validity check made at hook setup. If a Steam update
+		// drifted the vtable so badly the slot is no longer steamclient code, leave the in-memory
+		// cloud-disable OFF (badge fix then rests on the WriteVdfFile strip alone) rather than calling
+		// into a bad pointer. Don't record the appId in that case — we never wrote its cloudenabled.
+		bool doSet = false;
+		if (g_bCloudSetSlotValid)
+		{
+			std::lock_guard<std::mutex> lk(g_cloudWroteMtx);
+			doSet = g_cloudWroteApps.insert(appId).second;
+		}
+		if (doSet)
+		{
+			MemHlp::callVFunc<void(*)(void*, uint32_t, bool)>(
+				VFTIndexes::IClientRemoteStorage::SetCloudEnabledForApp, pClientRemoteStorage, appId, false);
+			g_pLog->once("Cloud-disabled controlled app %u (SetCloudEnabledForApp=false) — suppresses post-hot-reload badge; persist stripped at flush\n", appId);
+		}
+
 		g_pLog->once("Disabled cloud for %u\n", appId);
 		return false;
 	}
@@ -940,47 +1198,8 @@ static bool hkClientRemoteStorage_IsCloudEnabledForApp(void* pClientRemoteStorag
 	return enabled;
 }
 
-static bool isControlledCloudAppId(uint32_t appId)
-{
-	return appId && Ownership::isControlledApp(appId);
-}
-
-static bool shouldOverrideCloudSyncState(uint32_t appId)
-{
-	return isControlledCloudAppId(appId) && Apps::shouldDisableCloud(appId);
-}
-
-static uint32_t readCAutoCloudManagerContextAppId(void* pContext)
-{
-	if (!pContext)
-	{
-		return 0;
-	}
-
-	// Manual RE: CAutoCloudManager start-sync routine logs app id from context + 0x170.
-	// "StartSync" is a semantic name; no exported/debug symbol was found.
-	uint32_t appId = 0;
-	std::memcpy(&appId, static_cast<const char*>(pContext) + 0x170, sizeof(appId));
-	return appId;
-}
-
-static bool g_cAutoCloudManagerStartSyncReady = false;
 static bool g_bUpdateAppDownloadPlanReady = false;
-
-static uint32_t hkCAutoCloudManager_StartSync(void* pContext, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5)
-{
-	const uint32_t appId = readCAutoCloudManagerContextAppId(pContext);
-	if (shouldOverrideCloudSyncState(appId))
-	{
-		g_pLog->once("Disabled AutoCloud sync for %u\n", appId);
-		return 1;
-	}
-
-	// Passthrough: app is not a controlled+cloud-disabled app, so run the original.
-	// The override above returns 1 (== ERESULT_OK), confirmed on-device as the genuine
-	// success sentinel this routine returns.
-	return Hooks::CAutoCloudManager_StartSync.tramp.fn(pContext, a1, a2, a3, a4, a5);
-}
+static bool g_bConfigStoreWriteVdfFileReady = false;
 
 static void hkClientRemoteStorage_RunIPCFrame(void* pClientRemoteStorage, void* a1, void* a2, void* a3)
 {
@@ -990,6 +1209,32 @@ static void hkClientRemoteStorage_RunIPCFrame(void* pClientRemoteStorage, void* 
 	{
 		std::shared_ptr<lm_vmt_t> vft = std::make_shared<lm_vmt_t>();
 		LM_VmtNew(*reinterpret_cast<lm_address_t**>(pClientRemoteStorage), vft.get());
+
+		// Hardening: validate vtable[idx25] still holds the real SetCloudEnabledForApp before the badge
+		// fix calls it raw (read the pristine vtable here — we only hook idx24). Preferred check is
+		// FUNCTION IDENTITY: compare the slot against the address a byte-pattern resolves the function
+		// to, which catches a Steam-update VFT reorder where the slot moved to another VALID function.
+		// If the pattern didn't resolve (e.g. the function itself changed), fall back to the weaker
+		// in-module code-pointer sanity (catches only relocation/corruption). Either way a drift is a
+		// loud, safe degradation — never a crash on a bad vcall.
+		{
+			const unsigned int idx = VFTIndexes::IClientRemoteStorage::SetCloudEnabledForApp;
+			const lm_address_t expected = Patterns::IClientRemoteStorage::SetCloudEnabledForApp.address;
+			const lm_address_t* const vtbl = *reinterpret_cast<const lm_address_t* const*>(pClientRemoteStorage);
+			const char* reason;
+			if (expected != LM_ADDRESS_BAD)
+			{
+				g_bCloudSetSlotValid = isSteamClientCodePtr(vtbl) && vtbl[idx] == expected;
+				reason = "pattern resolved; slot mismatch (VFT reorder?)";
+			}
+			else
+			{
+				g_bCloudSetSlotValid = isVFuncSlotSane(pClientRemoteStorage, idx);
+				reason = "identity pattern unresolved; in-module sanity only";
+			}
+			if (!g_bCloudSetSlotValid)
+				g_pLog->warn("Cloud-fix: IClientRemoteStorage vtable[%d] is not SetCloudEnabledForApp (%s) — likely a Steam-update VFT drift. In-memory cloud-disable is OFF (badge fix relies on the WriteVdfFile strip only); re-verify the idx25 index/pattern.\n", idx, reason);
+		}
 
 		Hooks::IClientRemoteStorage_IsCloudEnabledForApp.setup(vft, VFTIndexes::IClientRemoteStorage::IsCloudEnabledForApp, hkClientRemoteStorage_IsCloudEnabledForApp);
 
@@ -1461,7 +1706,6 @@ namespace Hooks
 	DetourHook<LoadDepotDecryptionKey_t> LoadDepotDecryptionKey;
 	DetourHook<BuildDepotDependency_t> BuildDepotDependency;
 	DetourHook<BUpdateAppDownloadPlan_t> BUpdateAppDownloadPlan;
-	DetourHook<CAutoCloudManager_StartSync_t> CAutoCloudManager_StartSync;
 
 	DetourHook<CAPIJob_GetPlayerStats_t> CAPIJob_GetPlayerStats;
 
@@ -1485,6 +1729,7 @@ namespace Hooks
 	CUtlMemory_Grow_t              oCUtlMemoryGrow               = nullptr;
 	DetourHook<CPackageInfo_GetPackageInfo_t> CPackageInfo_GetPackageInfo;
 	DetourHook<CAppInfoCache_GetOrAddAppData_t> CAppInfoCache_GetOrAddAppData;
+	DetourHook<CConfigStore_WriteVdfFile_t> CConfigStore_WriteVdfFile;
 
 	DetourHook<CSteamUI_GetAppByID_detour_t>          CSteamUIAppController_GetAppByID;
 	DetourHook<CUpdateManager_MarkAppChange_detour_t> CUpdateManager_MarkAppChange;
@@ -1529,6 +1774,24 @@ bool Hooks::setup()
 	oMarkLicenseAsChanged         = reinterpret_cast<MarkLicenseAsChanged_t>(Patterns::CUser::MarkLicenseAsChanged.address);
 	oProcessPendingLicenseUpdates = reinterpret_cast<ProcessPendingLicenseUpdates_t>(Patterns::CUser::ProcessPendingLicenseUpdates.address);
 	oCUtlMemoryGrow               = reinterpret_cast<CUtlMemory_Grow_t>(Patterns::CUtlMemory::Grow.address);
+
+	g_bConfigStoreWriteVdfFileReady = CConfigStore_WriteVdfFile.setup(Patterns::CConfigStore::WriteVdfFile, &hkCConfigStore_WriteVdfFile);
+	g_pLog->debug
+	(
+		"CConfigStore::WriteVdfFile hook: ready=%i callsite=%p\n",
+		g_bConfigStoreWriteVdfFileReady,
+		Patterns::CConfigStore::SharedConfigWriteCallsite.address
+	);
+	// Make a pattern miss loud: without WriteVdfFile the cloud-config strip is OFF and controlled apps
+	// would silently persist/sync. (The callsite is only a diagnostic now, so its miss is non-fatal.)
+	if (!g_bConfigStoreWriteVdfFileReady)
+	{
+		g_pLog->warn("Cloud-config strip DISABLED: CConfigStore::WriteVdfFile pattern did not resolve — controlled apps' cloudenabled may persist to the cloud. Re-derive the pattern.\n");
+	}
+	else if (Patterns::CConfigStore::SharedConfigWriteCallsite.address == LM_ADDRESS_BAD)
+	{
+		g_pLog->info("Cloud-config strip: SharedConfigWriteCallsite pattern unresolved; filtering on buffer content only (still active).\n");
+	}
 
 	bool succeeded =
 		TraceIPC.setup(Patterns::TraceIPC, &hkTraceIPC)
@@ -1578,17 +1841,11 @@ bool Hooks::setup()
 		&& ISteamMatchmakingPingResponse_ServerResponded.setup(Patterns::ISteamMatchmakingPingResponse::ServerResponded, hkSteamMatchmakingPingResponse_ServerResponded);
 
 	g_bUpdateAppDownloadPlanReady = BUpdateAppDownloadPlan.setup(Patterns::BUpdateAppDownloadPlan, &hkBUpdateAppDownloadPlan);
-	g_cAutoCloudManagerStartSyncReady = CAutoCloudManager_StartSync.setup(Patterns::CAutoCloudManager::StartSync, &hkCAutoCloudManager_StartSync);
 
 	g_pLog->debug
 	(
 		"BUpdateAppDownloadPlan hook: ready=%i\n",
 		g_bUpdateAppDownloadPlanReady
-	);
-	g_pLog->debug
-	(
-		"CAutoCloudManager start-sync hook: ready=%i\n",
-		g_cAutoCloudManagerStartSyncReady
 	);
 
 	LuaLoader::setOnDepotsChanged(&Package::notifyLicenseChanged);
@@ -1620,9 +1877,9 @@ void Hooks::place()
 	{
 		BUpdateAppDownloadPlan.place();
 	}
-	if (g_cAutoCloudManagerStartSyncReady)
+	if (g_bConfigStoreWriteVdfFileReady)
 	{
-		CAutoCloudManager_StartSync.place();
+		CConfigStore_WriteVdfFile.place();
 	}
 
 	CAPIJob_GetPlayerStats.place();
@@ -1679,9 +1936,9 @@ void Hooks::remove()
 	{
 		BUpdateAppDownloadPlan.remove();
 	}
-	if (g_cAutoCloudManagerStartSyncReady)
+	if (g_bConfigStoreWriteVdfFileReady)
 	{
-		CAutoCloudManager_StartSync.remove();
+		CConfigStore_WriteVdfFile.remove();
 	}
 
 	CAPIJob_GetPlayerStats.remove();

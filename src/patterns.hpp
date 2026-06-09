@@ -90,11 +90,6 @@ namespace Patterns
 		extern Pattern_t RunIPCFrame;
 	}
 
-	namespace CAutoCloudManager
-	{
-		extern Pattern_t StartSync;
-	}
-
 	namespace IClientUser
 	{
 		extern Pattern_t RunIPCFrame;
@@ -131,6 +126,17 @@ namespace Patterns
 	namespace CAppInfoCache
 	{
 		extern Pattern_t GetOrAddAppData;   // 3-arg cdecl appinfo lookup/insert
+	}
+
+	namespace CConfigStore
+	{
+		extern Pattern_t SharedConfigWriteCallsite;
+		extern Pattern_t WriteVdfFile;
+	}
+
+	namespace IClientRemoteStorage
+	{
+		extern Pattern_t SetCloudEnabledForApp;   // idx25 target entry — identity check for the raw vcall
 	}
 
 	namespace CUtlMemory
