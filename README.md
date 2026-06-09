@@ -3,11 +3,22 @@
 
 ## Index
 
-1. [Getting started](#getting-started)
-2. [Hall of Fame 👑](#hall-of-fame-aka-credits)
-3. [Hall of Shame 🚨](#hall-of-shame-aka-scammers-leechers-etc)
-4. [Support](#support)
-5. [Related Projects](#related-projects)
+1. [About this hard fork](#about-this-hard-fork)
+2. [Getting started](#getting-started)
+3. [Hall of Fame 👑](#hall-of-fame-aka-credits)
+4. [Hall of Shame 🚨](#hall-of-shame-aka-scammers-leechers-etc)
+5. [Support](#support)
+6. [Related Projects](#related-projects)
+
+## About this hard fork
+
+This repository is a hard fork of the original SLSsteam project. It keeps the
+Linux Steam client modification base while adding a Lua-driven configuration
+layer and manifest support for depot keys, access tokens, and manifest pinning.
+
+The Lua and manifest workflows are inspired by
+[OpenSteamTool](https://github.com/OpenSteam001/OpenSteamTool), adapted for the
+Linux/SLSsteam environment rather than the Windows DLL model used upstream.
 
 ## Getting started
 
@@ -48,6 +59,9 @@ Please do not treat the issue tracker like a private support hotline!
 Feel free to join our [Discord](https://discord.gg/j3ZzjeV4eQ) instead.
 
 ## Related Projects
+
+[OpenSteamTool](https://github.com/OpenSteam001/OpenSteamTool): Inspiration for
+the Lua configuration and manifest workflows in this hard fork.
 
 [SLScheevo](https://github.com/xamionex/SLScheevo): Used to get Achievement Schemas
 
