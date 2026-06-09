@@ -80,8 +80,8 @@ public:
 	MTVariable<unsigned int> logLevel;
 	MTVariable<bool> extendedLogging;
 
-	// Manifest.Provider: selects the built-in HTTP provider for manifest code lookup.
-	// Default: "opensteamtool". Passed to ManifestProvider::setProvider() after load.
+	// Manifest request-code provider chain summary (display only; never read for behavior).
+	// The chain is set from yaml `Manifest.Providers` via ManifestProvider::setProviders() at load.
 	MTVariable<std::string> manifestProvider;
 	// Manifest.UseLuaManifestOverrides: when false, keep Steam IPC's manifest gid
 	// instead of applying lua setmanifestid(...) overrides.

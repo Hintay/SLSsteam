@@ -4,9 +4,11 @@
 #include "../curl.hpp"
 #include "../log.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -69,8 +71,7 @@ struct Provider {
 
 // Mirrors OST kProviders exactly: opensteamtool (default), wudrm, steamrun.
 // NOTE: wudrm is plain HTTP and is the provider OST recommends for users in
-// China; if the opensteamtool default is unreachable, set
-// `Manifest.Provider: wudrm` in config.yaml.
+// China; to force that endpoint without fallback, set `Manifest.Providers: wudrm`.
 static const Provider kProviders[] = {
     { "opensteamtool", "https://manifest.opensteamtool.com/{gid}",      parsePlainUint    },
     // Plain HTTP is intentional: matches the upstream OST provider URL.
@@ -80,27 +81,82 @@ static const Provider kProviders[] = {
     { "steamrun",      "https://manifest.steam.run/api/manifest/{gid}", parseSteamRunJson },
 };
 
-static const Provider* g_active = &kProviders[0]; // default: opensteamtool (matches OST)
+// The ordered fallback chain actually queried. Default = all built-ins in table order
+// (opensteamtool -> wudrm -> steamrun). Set once at config load; guarded by g_chainMtx because a
+// config hot-reload can rewrite it while async fetch workers read it.
+static std::mutex                   g_chainMtx;
+static std::vector<const Provider*> g_chain = { &kProviders[0], &kProviders[1], &kProviders[2] };
+
+static std::vector<const Provider*> defaultChain()
+{
+    return { &kProviders[0], &kProviders[1], &kProviders[2] };
+}
+
+static const Provider* findProvider(const std::string& name)
+{
+    for (const auto& p : kProviders)
+        if (name == p.name) return &p;
+    return nullptr;
+}
+
+static std::vector<const Provider*> snapshotChain()
+{
+    std::lock_guard<std::mutex> lk(g_chainMtx);
+    return g_chain;
+}
+
+static std::string chainSummary(const std::vector<const Provider*>& chain)
+{
+    std::string summary;
+    for (size_t i = 0; i < chain.size(); ++i) { if (i) summary += " -> "; summary += chain[i]->name; }
+    return summary;
+}
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
-bool setProvider(const std::string& name)
+void resetProviders()
 {
-    for (const auto& p : kProviders) {
-        if (name == p.name) {
-            g_active = &p;
-            g_pLog->info("ManifestProvider: active provider set to '%s'\n", p.name);
-            return true;
-        }
+    std::vector<const Provider*> chain = defaultChain();
+    const std::string summary = chainSummary(chain);
+    {
+        std::lock_guard<std::mutex> lk(g_chainMtx);
+        g_chain = std::move(chain);
     }
-    g_pLog->warn("ManifestProvider: unknown provider '%s', keeping '%s'\n",
-                 name.c_str(), g_active->name);
-    return false;
+    g_pLog->info("ManifestProvider: provider chain = %s (default)\n", summary.c_str());
+}
+
+bool setProviders(const std::vector<std::string>& names)
+{
+    std::vector<const Provider*> chain;
+    for (const auto& n : names) {
+        const Provider* p = findProvider(n);
+        if (!p) { g_pLog->warn("ManifestProvider: unknown provider '%s' in Providers list, skipping\n", n.c_str()); continue; }
+        if (std::find(chain.begin(), chain.end(), p) != chain.end()) continue;   // dedup
+        chain.push_back(p);
+    }
+    if (chain.empty()) {
+        g_pLog->warn("ManifestProvider: Providers list had no valid entries, keeping current chain\n");
+        return false;
+    }
+    const std::string summary = chainSummary(chain);
+    {
+        std::lock_guard<std::mutex> lk(g_chainMtx);
+        g_chain = std::move(chain);
+    }
+    g_pLog->info("ManifestProvider: provider chain = %s\n", summary.c_str());
+    return true;
 }
 
 const char* activeProviderName()
 {
-    return g_active->name;
+    std::lock_guard<std::mutex> lk(g_chainMtx);
+    return g_chain.empty() ? kProviders[0].name : g_chain.front()->name;
+}
+
+std::string activeProviderChainSummary()
+{
+    std::lock_guard<std::mutex> lk(g_chainMtx);
+    return chainSummary(g_chain.empty() ? defaultChain() : g_chain);
 }
 
 // Build the request URL by replacing the single "{gid}" token in the template.
@@ -122,10 +178,12 @@ static std::string buildUrl(const char* tmpl, uint64_t gid)
     return url;
 }
 
-bool fetchFromProvider(uint64_t gid, uint64_t& outCode)
+// Query a single provider. Returns true + outCode only on a valid (non-zero) code; false on any
+// failure — network/curl error, non-200 status (e.g. 403 from a blocked/unreachable endpoint),
+// parse failure, or code==0 — so the caller can fall through to the next provider.
+static bool tryProvider(const Provider& p, uint64_t gid, uint64_t& outCode)
 {
-    const Provider& p   = *g_active;
-    const std::string   url = buildUrl(p.urlTemplate, gid);
+    const std::string url = buildUrl(p.urlTemplate, gid);
 
     Curl::RequestOptions options;
     options.timeoutConnectMs = g_config.manifestTimeoutConnectMs.get();
@@ -147,16 +205,40 @@ bool fetchFromProvider(uint64_t gid, uint64_t& outCode)
 
     uint64_t code = 0;
     if (!p.parse(body, code)) {
-        g_pLog->warn("ManifestProvider: failed to parse response body (len=%zu)\n", body.size());
+        g_pLog->warn("ManifestProvider: provider='%s' failed to parse response body (len=%zu)\n", p.name, body.size());
         return false;
     }
     if (code == 0) {
-        g_pLog->warn("ManifestProvider: provider returned code=0, rejecting\n");
+        g_pLog->warn("ManifestProvider: provider='%s' returned code=0, rejecting\n", p.name);
         return false;
     }
 
     outCode = code;
     return true;
+}
+
+// Fetch a manifest code with provider fallback: try each configured provider in order until one
+// yields a valid code. A provider that 403s / is unreachable / lacks the gid no longer dead-ends
+// the whole fetch. Read-only over the global state, so it is safe to call from concurrent async
+// fetch workers.
+bool fetchFromProvider(uint64_t gid, uint64_t& outCode)
+{
+    const std::vector<const Provider*> chain = snapshotChain();
+
+    for (size_t i = 0; i < chain.size(); ++i) {
+        if (tryProvider(*chain[i], gid, outCode)) {
+            if (i > 0)
+                g_pLog->info("ManifestProvider: fell back to '%s' (#%zu in chain) for gid=%llu\n",
+                             chain[i]->name, i + 1, static_cast<unsigned long long>(gid));
+            return true;
+        }
+    }
+
+    // once() (not warn): dedups per gid via the message text and does not pop a critical notify —
+    // the single user-facing prompt is RequestCode's per-gid denial warn.
+    g_pLog->once("ManifestProvider: all %zu provider(s) in chain failed for gid=%llu\n",
+                 chain.size(), static_cast<unsigned long long>(gid));
+    return false;
 }
 
 } // namespace ManifestProvider

@@ -100,12 +100,20 @@ AchievementsSchemaProbeNoConnection: no
 PackageInjection: yes
 
 #Manifest settings:
-#Provider selects the built-in request-code provider: opensteamtool / wudrm / steamrun
+#Built-in request-code providers: opensteamtool / wudrm / steamrun.
+#Providers is the ordered fallback chain: each is tried in turn until one returns a code.
+#  Accepts a single value (Providers: wudrm), a block list (- one per line, shown below), or a
+#  flow list (Providers: [opensteamtool, wudrm, steamrun]) — all equivalent. A single entry = strict
+#  single provider, no fallback. Use a list to control order or restrict to a subset (omit one you
+#  can't reach). If the key is omitted, the default chain is opensteamtool -> wudrm -> steamrun.
 #Set UseLuaManifestOverrides to "no" to ignore lua manifest overrides and keep Steam IPC's latest manifest gid.
 #TimeoutConnectMs caps DNS/TCP/TLS setup; TimeoutTotalMs caps the whole libcurl request.
 #ReuseConnection keeps the built-in provider's HTTP/TLS session warm across manifest requests.
 Manifest:
-  Provider: opensteamtool
+  Providers:
+    - opensteamtool
+    - wudrm
+    - steamrun
   UseLuaManifestOverrides: yes
   TimeoutConnectMs: 5000
   TimeoutTotalMs: 10000

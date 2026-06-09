@@ -323,25 +323,35 @@ bool CConfig::loadSettings()
 		setError(ELoadError::MissingKey);
 	}
 
-	// Manifest.Provider — optional nested section; default "opensteamtool" if
-	// missing (matches OST). Users who need the China-friendly wudrm mirror can
-	// set `Manifest.Provider: wudrm`.
-	// Calls ManifestProvider::setProvider() so the HTTP fallback uses the right URL.
+	// Manifest — optional nested section. Manifest.Providers selects the request-code provider
+	// chain (scalar or list; see below), passed to ManifestProvider::setProviders() after load.
+	// If absent/empty, restore the default chain (opensteamtool -> wudrm -> steamrun), which makes
+	// config hot-reload behave the same as a fresh start.
 	{
 		const auto manifestNode = node["Manifest"];
-		std::string provider = "opensteamtool";
+		std::vector<std::string> providerList;
 		bool useLuaOverrides = true;
 		uint32_t timeoutConnectMs = 5000;
 		uint32_t timeoutTotalMs = 10000;
 		bool reuseConnection = true;
-		if (manifestNode && manifestNode["Provider"])
+		// Manifest.Providers — the ordered request-code provider chain. Accepts either a single
+		// scalar (`Providers: wudrm`) or a list (`Providers: [opensteamtool, wudrm, steamrun]`).
+		if (manifestNode && manifestNode["Providers"])
 		{
 			try
 			{
-				provider = manifestNode["Provider"].as<std::string>();
+				const auto pnode = manifestNode["Providers"];
+				if (pnode.IsSequence())
+					for (const auto& n : pnode) providerList.push_back(n.as<std::string>());
+				else if (pnode.IsScalar())
+					providerList.push_back(pnode.as<std::string>());
 			}
 			catch (...)
 			{
+				// A bad element (e.g. a nested node where a scalar is expected) throws mid-loop; discard
+				// the half-parsed prefix so we fall back to the default chain instead of silently
+				// applying a truncated one.
+				providerList.clear();
 				setError(ELoadError::ParsingException);
 			}
 		}
@@ -397,14 +407,14 @@ bool CConfig::loadSettings()
 		g_pLog->info("Manifest.TimeoutsMs: connect=%u total=%u\n",
 			manifestTimeoutConnectMs.get(), manifestTimeoutTotalMs.get());
 		g_pLog->info("Manifest.ReuseConnection: %i\n", manifestReuseConnection.get());
-		// Only store the value if it was actually applied, so g_config.manifestProvider
-		// never diverges from ManifestProvider's active provider. setProvider already
-		// logs the rejection detail, so don't double-log here.
-		if (ManifestProvider::setProvider(provider))
-		{
-			manifestProvider = provider;
-			g_pLog->info("Manifest.Provider: %s\n", provider.c_str());
-		}
+		// Apply the configured chain; absent/empty Providers restores the default all-built-ins chain.
+		// Keep the full chain in g_config.manifestProvider for diagnostics/display only; behavior reads
+		// ManifestProvider's active chain directly.
+		if (providerList.empty())
+			ManifestProvider::resetProviders();
+		else
+			ManifestProvider::setProviders(providerList);
+		manifestProvider = ManifestProvider::activeProviderChainSummary();
 	}
 
 	// Lua.Paths — optional list of extra directories to scan for .lua plugin files.

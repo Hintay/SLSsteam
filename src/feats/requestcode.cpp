@@ -7,6 +7,8 @@
 
 #include "../lua/LuaLoader.hpp"
 
+#include "../ownership.hpp"
+
 #include "../globals.hpp"
 #include "../log.hpp"
 
@@ -16,6 +18,7 @@
 #include <future>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 // Manifest request-code interception at the raw packet layer; see
@@ -38,12 +41,20 @@ namespace
 	// protobuf header bytes, transformed into the response header at inject time.
 	struct Pending {
 		uint64_t                    jobId;
+		uint64_t                    gid;
 		std::shared_future<uint64_t> future;
 		std::vector<uint8_t>        reqHdr;
 	};
 
 	std::vector<Pending> g_pending;
 	std::mutex           g_mutex;
+
+	// gids already warned about (no code -> fabricated denial). The notification fires once per gid:
+	// each retry of the same depot arrives with a fresh jobid, so without this the same failing
+	// download would pop a critical notify-send on every attempt.
+	std::mutex                   g_deniedGidMtx;
+	std::unordered_set<uint64_t> g_deniedGids;
+
 	// Lock-free fast-path gate for the recv hook (runs on every incoming packet):
 	// mirrors g_pending.size(); only written under g_mutex.
 	std::atomic<size_t>  g_pendingCount{0};
@@ -64,7 +75,20 @@ namespace
 			return false;
 		hdr.set_jobid_target(p.jobId);   // response targets the request's source job
 		hdr.clear_jobid_source();
-		hdr.set_eresult(code ? ERESULT_OK : ERESULT_ACCESS_DENIED);
+		if (code)
+		{
+			hdr.set_eresult(ERESULT_OK);
+		}
+		else
+		{
+			// Match the real CM denial response byte-for-byte (captured from a live CM Access Denied):
+			// a failed ServiceMethod RPC carries eresult=ACCESS_DENIED PLUS transport_error=1 and
+			// seq_num=1. Without transport_error Steam does not treat the packet as a proper RPC
+			// failure, so the download manager never gets a clean result and the request loops.
+			hdr.set_eresult(ERESULT_ACCESS_DENIED);
+			hdr.set_transport_error(1);
+			hdr.set_seq_num(1);
+		}
 
 		CContentServerDirectory_GetManifestRequestCode_Response resp;
 		if (code) resp.set_manifest_request_code(code);
@@ -106,6 +130,15 @@ namespace RequestCode
 		const uint64_t gid     = req.manifest_id();
 		const uint32_t appId   = req.has_app_id() ? req.app_id() : 0;
 
+		// Only fabricate request codes for apps we spoof ownership of (lua/yaml-injected and NOT
+		// genuinely owned). Genuine apps must reach the CM so Steam fetches their real code —
+		// intercepting them and then failing to produce a code (not in the lua set, or a provider
+		// error like opensteamtool 403) fabricates a denial and BLOCKS a legitimate download.
+		// shouldSpoofOwnership is a config-set + genuine-owned-set lookup, safe to call on this frame
+		// thread (it never makes a Steam client call). appId==0 (absent in the request) -> pass through.
+		if (!appId || !Ownership::shouldSpoofOwnership(appId))
+			return false;
+
 		g_pLog->debug("RequestCode: drop+fabricate for app=%u depot=%u gid=%llu (jobid=%llu)\n",
 		              appId, depotId, static_cast<unsigned long long>(gid),
 		              static_cast<unsigned long long>(jobId));
@@ -139,6 +172,7 @@ namespace RequestCode
 
 		Pending p;
 		p.jobId  = jobId;
+		p.gid    = gid;
 		p.future = std::move(future);
 		p.reqHdr.assign(pHdr, pHdr + cbHdr);
 
@@ -186,11 +220,34 @@ namespace RequestCode
 		}
 
 		if (code)
+		{
+			// Clear any prior denial mark for this gid: a later failure of the same depot should
+			// re-notify, and successfully-fetched gids shouldn't accumulate in the set for the
+			// process lifetime.
+			{
+				std::lock_guard<std::mutex> lk(g_deniedGidMtx);
+				g_deniedGids.erase(ready.gid);
+			}
 			g_pLog->info("RequestCode: injected fabricated response code=%llu for jobid=%llu\n",
 			             static_cast<unsigned long long>(code), static_cast<unsigned long long>(ready.jobId));
+		}
 		else
-			g_pLog->warn("RequestCode: no code for jobid=%llu, fabricated denial\n",
-			             static_cast<unsigned long long>(ready.jobId));
+		{
+			bool firstForGid;
+			{
+				std::lock_guard<std::mutex> lk(g_deniedGidMtx);
+				firstForGid = g_deniedGids.insert(ready.gid).second;
+			}
+			// Warn (critical notify) once per gid; later same-gid denials (new jobids on retry) go to
+			// debug so a single failing download doesn't pop a notification on every attempt.
+			if (firstForGid)
+				g_pLog->warn("RequestCode: no manifest code for gid=%llu (all providers failed) — fabricated Access Denied; this download will fail\n",
+				             static_cast<unsigned long long>(ready.gid));
+			else
+				g_pLog->debug("RequestCode: no code for gid=%llu jobid=%llu, fabricated Access Denied (already warned)\n",
+				              static_cast<unsigned long long>(ready.gid),
+				              static_cast<unsigned long long>(ready.jobId));
+		}
 
 		outData = g_injectPkt.data();
 		outSize = static_cast<uint32_t>(g_injectPkt.size());
