@@ -16,6 +16,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Container images (ubuntu:22.04, archlinux) default run-steps to sh/dash; force
+# bash so steps can use bash features like ${VAR//search/replace}.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   # Distributable .so (.7z): native gcc against the system's 32-bit libs. Built
   # on Ubuntu 22.04 (glibc 2.35, openssl 3) to keep the glibc floor low and
