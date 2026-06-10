@@ -192,16 +192,20 @@ jobs:
         run: |
           set -eux
           sudo apt-get update && sudo apt-get install -y p7zip-full
+          # Release archives carry the SLSsteam-Plus name to distinguish them
+          # from upstream; the .pkg keeps the internal `slssteam` pkgname so it
+          # stays a drop-in replacement.
           VERSION="${GITHUB_REF_NAME}"
-          ( cd bundle && 7z a -mx9 -m9=lzma2 "../SLSsteam-${VERSION}.7z" . )
-          ( cd bundle && 7z a -mx9 -m9=lzma  "../SLSsteam-${VERSION}.zip" . )
+          ( cd bundle && 7z a -mx9 -m9=lzma2 "../SLSsteam-Plus-${VERSION}.7z" . )
+          ( cd bundle && 7z a -mx9 -m9=lzma  "../SLSsteam-Plus-${VERSION}.zip" . )
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          name: SLSsteam-Plus ${{ github.ref_name }}
           files: |
-            SLSsteam-*.7z
-            SLSsteam-*.zip
+            SLSsteam-Plus-*.7z
+            SLSsteam-Plus-*.zip
             artifacts/*.pkg.tar.zst
           generate_release_notes: true
           # Draft: CI attaches assets, you review + publish from the Releases page.

@@ -1,4 +1,4 @@
-# **SLSsteam - Steamclient Modification for Linux**
+# **SLSsteam-Plus - Steamclient Modification for Linux**
 ![](https://github.com/AceSLS/SLSsteam/blob/dev/res/banner.png?raw=true "SLSsteam")
 
 ## Index
@@ -12,9 +12,13 @@
 
 ## About this hard fork
 
-This repository is a hard fork of the original SLSsteam project. It keeps the
-Linux Steam client modification base while adding a Lua-driven configuration
-layer and manifest support for depot keys, access tokens, and manifest pinning.
+SLSsteam-Plus is a hard fork of the original
+[SLSsteam](https://github.com/AceSLS/SLSsteam) project. It keeps the Linux Steam
+client modification base while adding a Lua-driven configuration layer and
+manifest support for depot keys, access tokens, and manifest pinning. It stays a
+drop-in replacement for upstream — same `~/.config/SLSsteam` layout and library
+names — so only the released archives are named `SLSsteam-Plus-*` to tell them
+apart.
 
 The Lua and manifest workflows are inspired by
 [OpenSteamTool](https://github.com/OpenSteam001/OpenSteamTool), adapted for the
