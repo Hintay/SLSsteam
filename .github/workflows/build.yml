@@ -142,7 +142,14 @@ jobs:
           # version from res/version.txt.
           cp artifacts/SLSsteam.so artifacts/library-inject.so artifacts/ticket-grabber "$d/"
           cp res/SLSsteam.desktop res/SLSsteam-native.desktop res/logo.png "$d/"
-          sed -i "s/^pkgver=.*/pkgver=$(cat res/version.txt)/" "$d/PKGBUILD"
+          # pkgver: on a tag build use the sanitized tag (v0.0.1-test → 0.0.1_test)
+          # so the .pkg version matches the release; otherwise res/version.txt.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            pv="${GITHUB_REF_NAME#v}"; pv="${pv//[^A-Za-z0-9._]/_}"
+          else
+            pv="$(cat res/version.txt)"
+          fi
+          sed -i "s/^pkgver=.*/pkgver=$pv/" "$d/PKGBUILD"
           # makepkg refuses to run as root; -d skips dep checks (no compile, deps
           # only matter when the package is installed).
           useradd -m builder

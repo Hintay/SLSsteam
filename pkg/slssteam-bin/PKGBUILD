@@ -4,7 +4,7 @@
 # Build workflow instead of compiling from source. CI copies SLSsteam.so +
 # library-inject.so + the res/ assets next to this PKGBUILD, rewrites pkgver,
 # and runs `makepkg -d`. For source builds see ../slssteam and ../slssteam-git.
-pkgname=slssteam
+pkgname=slssteam-plus
 pkgver=0
 pkgrel=1
 pkgdesc="Steamclient Mod (prebuilt binary)"
@@ -21,7 +21,7 @@ depends=('steam'
 optdepends=('steam-native'
             'dotnet-runtime-9.0: sls-ticket-grabber')
 provides=('slssteam')
-conflicts=('slssteam-git')
+conflicts=('slssteam' 'slssteam-git')
 # Don't strip (matches upstream, avoids touching the prebuilt binary) and skip
 # the debug package (otherwise makepkg leaves an empty usr/src/debug/).
 options=(!strip !debug)
