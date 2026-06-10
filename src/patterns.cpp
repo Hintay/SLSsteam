@@ -53,6 +53,14 @@ using SigFollowMode = MemHlp::SigFollowMode;
 
 namespace Patterns
 {
+	// MUST stay before every Pattern_t below. Each Pattern_t constructor
+	// registers itself here via patterns.emplace_back(this). Defined AFTER the
+	// Pattern_t objects (same TU), this vector's default-construction runs last
+	// in definition order and wipes all registrations — a static-init-order bug
+	// that leaves the container empty, so no pattern ever resolves (every hook
+	// that relies on a signature silently fails). Keep it first.
+	std::vector<Pattern_t*> patterns;
+
 	Pattern_t FamilyGroupRunningApp
 	{
 		"FamilyGroupRunningApp",
@@ -500,6 +508,4 @@ namespace Patterns
 			MemHlp::SigFollowMode::None, &g_modSteamUI
 		};
 	}
-
-	std::vector<Pattern_t*> patterns;
 }
