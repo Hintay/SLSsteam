@@ -22,8 +22,9 @@ optdepends=('steam-native'
             'dotnet-runtime-9.0: sls-ticket-grabber')
 provides=('slssteam')
 conflicts=('slssteam-git')
-# Don't strip: matches upstream and avoids touching the prebuilt binary.
-options=(!strip)
+# Don't strip (matches upstream, avoids touching the prebuilt binary) and skip
+# the debug package (otherwise makepkg leaves an empty usr/src/debug/).
+options=(!strip !debug)
 
 source=('SLSsteam.so'
         'library-inject.so'
