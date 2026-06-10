@@ -2,6 +2,6 @@
 { pkgs ? import <nixpkgs> {} }:
 let p = pkgs.pkgsi686Linux;
 in p.mkShell {
-  nativeBuildInputs = [ p.gcc p.gnumake p.pkg-config ];
+  nativeBuildInputs = [ p.gcc p.gnumake p.pkg-config pkgs.cmake ];
   buildInputs = [ p.openssl p.curl p.lua5_4 ];
 }

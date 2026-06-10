@@ -115,6 +115,19 @@ $(PROTOBUF_STAMP):
 	rm -f "$(PROTOBUF_DIR)/protobuf.tar.gz"
 	touch "$@"
 
+# Build the host protoc from the fetched source via the tarball's bundled CMake
+# (as OST does). protoc is a HOST build tool — no -m32. Cached: rebuilt only if the
+# stamp changes. tests OFF; static; no shared libs.
+$(PROTOC): $(PROTOBUF_STAMP)
+	@mkdir -p tools $(PROTOBUF_DIR)/build-host
+	cmake -S "$(PROTOBUF_DIR)/cmake" -B "$(PROTOBUF_DIR)/build-host" \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+		-Dprotobuf_BUILD_TESTS=OFF \
+		-Dprotobuf_BUILD_SHARED_LIBS=OFF
+	cmake --build "$(PROTOBUF_DIR)/build-host" --target protoc -j
+	cp "$(PROTOBUF_DIR)/build-host/protoc" "$(PROTOC)"
+
 # The unpacked .c files are produced by the fetch step (order-only: the stamp's
 # mtime must not force a rebuild of every object).
 $(LUA_DIR)/%.c: | $(LUA_STAMP) ;
