@@ -1,0 +1,202 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege by default; only the release job elevates to contents: write.
+permissions:
+  contents: read
+
+# Cancel superseded PR runs; let branch/tag pushes finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Distributable .so (.7z): native gcc against the system's 32-bit libs. Built
+  # on Ubuntu 22.04 (glibc 2.35, openssl 3) to keep the glibc floor low and
+  # cover as many systems as possible — close to upstream's ~glibc 2.34 floor.
+  # Only Lua is static (fetched + linked by the Makefile); libstdc++/libgcc/
+  # curl/openssl stay dynamic. (A Nix build, by contrast, is /nix/store-bound.)
+  build:
+    name: Build .so (i686)
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    steps:
+      - name: Install toolchain + 32-bit dev libs
+        run: |
+          set -eux
+          dpkg --add-architecture i386
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            g++ g++-multilib make pkg-config git curl ca-certificates \
+            libssl-dev:i386 libcurl4-openssl-dev:i386
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        env:
+          # Resolve the i386 .pc files (openssl/libcurl), not the amd64 ones.
+          PKG_CONFIG_LIBDIR: /usr/lib/i386-linux-gnu/pkgconfig:/usr/share/pkgconfig
+        run: |
+          set -eux
+          make bin/SLSsteam.so bin/library-inject.so
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp bin/SLSsteam.so bin/library-inject.so dist/
+
+      # Name artifacts after the git ref (tag-driven). Sanitize '/' so PR refs
+      # like "123/merge" don't produce an invalid artifact name.
+      - name: Compute artifact name
+        id: meta
+        run: echo "name=SLSsteam-${GITHUB_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.name }}
+          path: dist/
+          if-no-files-found: error
+
+  # Verify the Nix flake still builds, for nix/home-manager users who build it
+  # themselves. NOT a distribution artifact: nix output is /nix/store-coupled
+  # and not portable to machines without that store.
+  nix-check:
+    name: Nix flake build (verify only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', '**/*.nix') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 5G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+
+      - name: nix build
+        run: nix build .#sls-steam --print-build-logs
+
+  # Package the prebuilt .so into a pacman package (.pkg.tar.zst) for Arch /
+  # SteamOS. makepkg only packages here (no compile) — the .so already runs on
+  # those systems via lib32-curl/lib32-openssl, so no second 32-bit toolchain
+  # is needed. See pkg/slssteam-bin/PKGBUILD.
+  # 64-bit .NET companion CLI (no 32-bit x86 .NET exists), built separately and
+  # bundled into both the .7z and the .pkg to match the official release.
+  ticket-grabber:
+    name: Build ticket-grabber (x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - name: Publish
+        run: dotnet publish tools/ticket-grabber/ticket-grabber.csproj -r linux-x64 -c Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ticket-grabber
+          path: tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber
+          if-no-files-found: error
+
+  package-arch:
+    name: Package .pkg (Arch)
+    needs: [build, ticket-grabber]
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install base-devel
+        run: pacman -Syu --noconfirm --needed base-devel git sudo
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: makepkg
+        run: |
+          set -eux
+          d="$PWD/pkg/slssteam-bin"
+          # Stage the prebuilt .so + res assets next to the PKGBUILD and pin the
+          # version from res/version.txt.
+          cp artifacts/SLSsteam.so artifacts/library-inject.so artifacts/ticket-grabber "$d/"
+          cp res/SLSsteam.desktop res/SLSsteam-native.desktop res/logo.png "$d/"
+          sed -i "s/^pkgver=.*/pkgver=$(cat res/version.txt)/" "$d/PKGBUILD"
+          # makepkg refuses to run as root; -d skips dep checks (no compile, deps
+          # only matter when the package is installed).
+          useradd -m builder
+          chown -R builder "$d"
+          su builder -c "cd '$d' && makepkg -d --noconfirm"
+          mkdir -p out && cp "$d"/*.pkg.tar.zst out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slssteam-pkg
+          path: out/*.pkg.tar.zst
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: [build, package-arch, ticket-grabber]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    # Only this job needs write access, to publish the release assets.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Assemble release bundle
+        run: |
+          set -eux
+          # Mirror the official release layout (minus SLScheevo — this fork
+          # implements achievements internally). setup.sh only needs ./bin/*;
+          # the rest are reference files / the ticket-grabber tool for the user.
+          mkdir -p bundle/bin bundle/res bundle/docs \
+                   bundle/tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish
+          cp artifacts/SLSsteam.so       bundle/bin/
+          cp artifacts/library-inject.so bundle/bin/
+          cp setup.sh        bundle/
+          cp res/config.yaml bundle/res/
+          cp -r docs/LICENSE bundle/docs/LICENSE
+          install -m755 artifacts/ticket-grabber \
+            bundle/tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber
+
+      - name: Package archives
+        run: |
+          set -eux
+          sudo apt-get update && sudo apt-get install -y p7zip-full
+          VERSION="${GITHUB_REF_NAME}"
+          ( cd bundle && 7z a -mx9 -m9=lzma2 "../SLSsteam-${VERSION}.7z" . )
+          ( cd bundle && 7z a -mx9 -m9=lzma  "../SLSsteam-${VERSION}.zip" . )
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            SLSsteam-*.7z
+            SLSsteam-*.zip
+            artifacts/*.pkg.tar.zst
+          generate_release_notes: true
+          # Draft: CI attaches assets, you review + publish from the Releases page.
+          draft: true
