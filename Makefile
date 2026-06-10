@@ -128,6 +128,22 @@ $(PROTOC): $(PROTOBUF_STAMP)
 	cmake --build "$(PROTOBUF_DIR)/build-host" --target protoc -j
 	cp "$(PROTOBUF_DIR)/build-host/protoc" "$(PROTOC)"
 
+# Build the 32-bit libprotobuf-lite.a from the same fetched source. MUST match the
+# project ABI: -m32 -fPIC and -D_GLIBCXX_USE_CXX11_ABI=0 (std::string ABI must agree
+# with the rest of the .so). PROTOC_BINARIES OFF — only the lite runtime is built.
+$(PROTOBUF_LITE_A): $(PROTOBUF_STAMP)
+	@mkdir -p lib $(PROTOBUF_DIR)/build-lite32
+	cmake -S "$(PROTOBUF_DIR)/cmake" -B "$(PROTOBUF_DIR)/build-lite32" \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+		-Dprotobuf_BUILD_TESTS=OFF \
+		-Dprotobuf_BUILD_SHARED_LIBS=OFF \
+		-Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
+		-DCMAKE_CXX_FLAGS="-m32 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0" \
+		-DCMAKE_C_FLAGS="-m32 -fPIC"
+	cmake --build "$(PROTOBUF_DIR)/build-lite32" --target libprotobuf-lite -j
+	cp "$(PROTOBUF_DIR)/build-lite32/libprotobuf-lite.a" "$(PROTOBUF_LITE_A)"
+
 # The unpacked .c files are produced by the fetch step (order-only: the stamp's
 # mtime must not force a rebuild of every object).
 $(LUA_DIR)/%.c: | $(LUA_STAMP) ;
