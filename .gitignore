@@ -6,3 +6,9 @@ zip
 
 # Lua 5.4 sources are fetched at build time, not committed.
 /third_party/lua/
+
+# Developer notes live in their own repo (docs/developer/); docs/superpowers/ is
+# the superpowers working dir. Neither is part of this repo — only docs/LICENSE/ is.
+docs/developer/
+docs/superpowers/
+.DS_Store
