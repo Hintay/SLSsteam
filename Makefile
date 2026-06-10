@@ -21,6 +21,17 @@ LUA_VER    := 5.4.8
 LUA_SHA256 := 4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae
 LUA_DIR    := third_party/lua
 LUA_STAMP  := $(LUA_DIR)/.fetched-$(LUA_VER)
+
+# protobuf is fetched + built at build time (host protoc + 32-bit libprotobuf-lite),
+# mirroring the Lua handling above. NOT committed. Keep PROTOBUF_VER / PROTOBUF_SHA256
+# in sync with nix-modules/default.nix (its sandbox has no network -> fetchurl pre-stage).
+PROTOBUF_VER    := 3.15.8
+PROTOBUF_SHA256 := 9b57647b898e45253c98fae35146f6a5e9e788817d29019f9280270c951a0038
+PROTOBUF_DIR    := third_party/protobuf
+PROTOBUF_STAMP  := $(PROTOBUF_DIR)/.fetched-$(PROTOBUF_VER)
+PROTOC          := tools/protoc
+PROTOBUF_LITE_A := lib/libprotobuf-lite.a
+
 # The lua 5.4 library sources (everything except the lua.c/luac.c standalone
 # mains). Hard-coded rather than $(wildcard) because the tree does not exist at
 # parse time on a fresh checkout.
@@ -91,6 +102,17 @@ $(LUA_STAMP):
 	printf '%s  %s\n' "$(LUA_SHA256)" "$(LUA_DIR)/lua.tar.gz" | sha256sum -c -
 	tar xzf "$(LUA_DIR)/lua.tar.gz" -C "$(LUA_DIR)" --strip-components=2 "lua-$(LUA_VER)/src"
 	rm -f "$(LUA_DIR)/lua.tar.gz" "$(LUA_DIR)/lua.c" "$(LUA_DIR)/luac.c"
+	touch "$@"
+
+# Fetch + verify + unpack the full protobuf source tree (need cmake/ + src/, so no
+# aggressive strip). Network is needed only here; the Nix build pre-stages this tree
+# + stamp (its sandbox has no net).
+$(PROTOBUF_STAMP):
+	@mkdir -p $(PROTOBUF_DIR)
+	curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v$(PROTOBUF_VER)/protobuf-cpp-$(PROTOBUF_VER).tar.gz" -o "$(PROTOBUF_DIR)/protobuf.tar.gz"
+	printf '%s  %s\n' "$(PROTOBUF_SHA256)" "$(PROTOBUF_DIR)/protobuf.tar.gz" | sha256sum -c -
+	tar xzf "$(PROTOBUF_DIR)/protobuf.tar.gz" -C "$(PROTOBUF_DIR)" --strip-components=1 "protobuf-$(PROTOBUF_VER)"
+	rm -f "$(PROTOBUF_DIR)/protobuf.tar.gz"
 	touch "$@"
 
 # The unpacked .c files are produced by the fetch step (order-only: the stamp's
