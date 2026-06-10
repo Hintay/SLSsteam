@@ -3,19 +3,43 @@
 
 #Force g++ cause clang crashes on some hooks
 CXX := g++
+CC := gcc
 
 libs := $(wildcard lib/*.a)
 srcs := $(shell find src/ -type f -iname "*.cpp")
 objs := $(srcs:src/%.cpp=obj/%.o)
 deps := $(objs:%.o=%.d)
 
+# Lua 5.4 is fetched at build time (checksum-verified, NOT committed to git) and
+# built into a static archive linked into the .so. This removes any external
+# 32-bit lua runtime dependency on every target (gcc .7z / Arch makepkg / Nix),
+# matching upstream which only depends on openssl + curl.
+# NOTE: the Nix sandbox has no network, so nix-modules/default.nix pre-stages
+# these same sources via fetchurl and touches $(LUA_STAMP) so make skips the
+# download. Keep LUA_VER / LUA_SHA256 in sync with that file.
+LUA_VER    := 5.4.8
+LUA_SHA256 := 4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae
+LUA_DIR    := third_party/lua
+LUA_STAMP  := $(LUA_DIR)/.fetched-$(LUA_VER)
+# The lua 5.4 library sources (everything except the lua.c/luac.c standalone
+# mains). Hard-coded rather than $(wildcard) because the tree does not exist at
+# parse time on a fresh checkout.
+lua_names  := lapi lauxlib lbaselib lcode lcorolib lctype ldblib ldebug ldo \
+              ldump lfunc lgc linit liolib llex lmathlib lmem loadlib lobject \
+              lopcodes loslib lparser lstate lstring lstrlib ltable ltablib ltm \
+              lundump lutf8lib lvm lzio
+lua_a      := obj/liblua5.4.a
+lua_objs   := $(lua_names:%=obj/luavendor/%.o)
+
 CXXFLAGS := -O3 -flto=auto -fPIC -m32 -std=c++20 -Wall -Wextra -Wpedantic -Wno-error=format-security -D_GLIBCXX_USE_CXX11_ABI=0
-CXXFLAGS += $(shell pkg-config --cflags "lua5.4")
+CXXFLAGS += -Ithird_party/lua
 
 LDFLAGS := -shared -Wl,--no-undefined
 LDFLAGS += $(shell pkg-config --libs "openssl")
 LDFLAGS += $(shell pkg-config --libs "libcurl")
-LDFLAGS += $(shell pkg-config --libs "lua5.4")
+# Vendored lua is linked via $(lua_a); -ldl satisfies loadlib's dlopen (a no-op
+# stub on modern glibc, so it adds no external package dependency).
+LDFLAGS += -ldl
 
 #DATE := $(shell date "+%Y%m%d%H%M%S")
 DATE := $(shell cat res/version.txt)
@@ -59,7 +83,38 @@ netpacket_smoke: bin/netpacket_smoke
 
 audit-libs: bin/SLSsteam.so bin/library-inject.so tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber
 
-bin/SLSsteam.so: $(objs) $(libs)
+# Fetch + verify + unpack Lua sources on first build. Network is needed only
+# here; the Nix build pre-stages the tree + this stamp (its sandbox has no net).
+$(LUA_STAMP):
+	@mkdir -p $(LUA_DIR)
+	curl -fsSL "https://www.lua.org/ftp/lua-$(LUA_VER).tar.gz" -o "$(LUA_DIR)/lua.tar.gz"
+	printf '%s  %s\n' "$(LUA_SHA256)" "$(LUA_DIR)/lua.tar.gz" | sha256sum -c -
+	tar xzf "$(LUA_DIR)/lua.tar.gz" -C "$(LUA_DIR)" --strip-components=2 "lua-$(LUA_VER)/src"
+	rm -f "$(LUA_DIR)/lua.tar.gz" "$(LUA_DIR)/lua.c" "$(LUA_DIR)/luac.c"
+	touch "$@"
+
+# The unpacked .c files are produced by the fetch step (order-only: the stamp's
+# mtime must not force a rebuild of every object).
+$(LUA_DIR)/%.c: | $(LUA_STAMP) ;
+
+# Compile each lua source as C (gcc) into obj/luavendor/ — a separate tree from
+# obj/lua/ (which holds the project's own src/lua/*.cpp) so the pattern rules
+# never collide. LUA_USE_LINUX enables the POSIX/dlopen feature set; readline is
+# only used by the excluded standalone interpreter.
+obj/luavendor/%.o: $(LUA_DIR)/%.c | $(LUA_STAMP)
+	@mkdir -p $(dir $@)
+	$(CC) -m32 -fPIC -O2 -DLUA_USE_LINUX -I$(LUA_DIR) -c $< -o $@
+
+$(lua_a): $(lua_objs)
+	@mkdir -p $(dir $@)
+	ar rcs $@ $^
+
+# Project sources compile with -I$(LUA_DIR) and some #include <lua.h>, so every
+# object must wait for the lua fetch/extract. Order-only (|): the stamp's mtime
+# must not force a full rebuild of the tree.
+$(objs): | $(LUA_STAMP)
+
+bin/SLSsteam.so: $(objs) $(lua_a) $(libs)
 	@mkdir -p bin
 	$(CXX) $(CXXFLAGS) $^ -o bin/SLSsteam.so $(LDFLAGS)
 

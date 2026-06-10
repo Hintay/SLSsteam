@@ -1,6 +1,8 @@
 .clangd
 .git
-.github
 bin
 obj
 zip
+
+# Lua 5.4 sources are fetched at build time, not committed.
+/third_party/lua/

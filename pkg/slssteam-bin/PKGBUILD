@@ -1,0 +1,49 @@
+# Maintainer: Hintay <hintay@me.com>
+#
+# Prebuilt ("-bin") package: installs the 32-bit .so produced by the GitHub
+# Build workflow instead of compiling from source. CI copies SLSsteam.so +
+# library-inject.so + the res/ assets next to this PKGBUILD, rewrites pkgver,
+# and runs `makepkg -d`. For source builds see ../slssteam and ../slssteam-git.
+pkgname=slssteam
+pkgver=0
+pkgrel=1
+pkgdesc="Steamclient Mod (prebuilt binary)"
+arch=('x86_64')
+url="https://github.com/Hintay/SLSsteam"
+license=('AGPL-3.0-only')
+# The .so is 32-bit and dynamically links the system lib32 gcc/curl/openssl
+# runtimes (only Lua is statically linked into it).
+depends=('steam'
+         'lib32-glibc'
+         'lib32-gcc-libs'
+         'lib32-curl'
+         'lib32-openssl')
+optdepends=('steam-native'
+            'dotnet-runtime-9.0: sls-ticket-grabber')
+provides=('slssteam')
+conflicts=('slssteam-git')
+# Don't strip (matches upstream, avoids touching the prebuilt binary) and skip
+# the debug package (otherwise makepkg leaves an empty usr/src/debug/).
+options=(!strip !debug)
+
+source=('SLSsteam.so'
+        'library-inject.so'
+        'ticket-grabber'
+        'SLSsteam.desktop'
+        'SLSsteam-native.desktop'
+        'logo.png')
+sha256sums=('SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP')
+
+package() {
+	install -Dm644 "$srcdir/SLSsteam.so"             "$pkgdir/usr/lib32/libSLSsteam.so"
+	install -Dm644 "$srcdir/library-inject.so"       "$pkgdir/usr/lib32/libSLS-library-inject.so"
+	install -Dm644 "$srcdir/SLSsteam.desktop"        "$pkgdir/usr/share/applications/SLSsteam.desktop"
+	install -Dm644 "$srcdir/SLSsteam-native.desktop" "$pkgdir/usr/share/applications/SLSsteam-native.desktop"
+	install -Dm644 "$srcdir/logo.png"                "$pkgdir/usr/share/pixmaps/SLSsteam.png"
+	install -Dm755 "$srcdir/ticket-grabber"          "$pkgdir/usr/bin/sls-ticket-grabber"
+}
