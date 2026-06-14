@@ -1,0 +1,264 @@
+// Single curated Steam IPC schema for SLSsteam. Message-level subset of the Steam
+// protobuf schema (verbatim message bodies; only message SELECTION is curated).
+// Upstream message bodies copied verbatim from the matching Steam steamclient/*.proto.
+// Service-method messages (Player.GetUserStats, ContentServerDirectory.GetManifestRequestCode)
+// come from the Steam service-method schema (steam_messages.proto).
+// LITE_RUNTIME to link against the build-time libprotobuf-lite.
+//
+// Message bodies are kept VERBATIM (all fields, exact tag numbers) — never trim
+// individual fields. Wire-format compatibility relies on tag numbers, and dropping a
+// field the client code reads would compile clean but fail silently at runtime.
+//
+// Re-extraction after a Steam client update: re-copy the listed messages verbatim from
+// the matching steam-monitor source file, then let protoc resolve the closure (a missing
+// referenced type makes protoc fail — copy it too). message -> source file:
+//   CPlayer_GetUserStats_{Request,Response}                        steam_messages.proto
+//   CContentServerDirectory_GetManifestRequestCode_{Request,Resp}  steam_messages.proto
+//   CMsgIPAddress, CMsgGCRoutingProtoBufHeader, CMsgProtoBufHeader  steammessages_base.proto
+//   CMsgClientGamesPlayed, CMsgClientGetAppOwnershipTicket,
+//     CMsgClientGetAppOwnershipTicketResponse,
+//     CMsgClientRequestEncryptedAppTicketResponse,
+//     CMsgClientWalletInfoUpdate                                    steammessages_clientserver.proto
+//   CMsgClientEmailAddrInfo                                         steammessages_clientserver_2.proto
+//   CMsgClientPICSProductInfoRequest                               steammessages_clientserver_appinfo.proto
+//   CMsgClientGetUserStats, CMsgClientGetUserStatsResponse         steammessages_clientserver_userstats.proto
+//   EncryptedAppTicket                                             encrypted_app_ticket.proto
+syntax = "proto2";
+option optimize_for = LITE_RUNTIME;
+
+// ---- Service methods (manifest request-code, Player.GetUserStats) ----
+
+message CPlayer_GetUserStats_Request {
+	optional uint64 steamid = 1;
+	optional uint32 appid = 2;
+	optional bytes sha_schema = 3;
+	optional uint32 crc_stats = 4;
+}
+
+message CPlayer_GetUserStats_Response {
+	message Unlock_Time {
+		optional uint32 achievement_bit = 1;
+		optional fixed32 unlock_time = 2;
+	}
+	message Stats {
+		optional uint32 stat_id = 1;
+		optional uint32 stat_value = 2;
+		repeated .CPlayer_GetUserStats_Response.Unlock_Time unlock_times = 3;
+	}
+	optional bytes sha_schema = 1;
+	optional uint32 crc_stats = 2;
+	optional bytes schema = 3;
+	repeated .CPlayer_GetUserStats_Response.Stats stats = 4;
+}
+
+message CContentServerDirectory_GetManifestRequestCode_Request {
+	optional uint32 app_id = 1;
+	optional uint32 depot_id = 2;
+	optional uint64 manifest_id = 3;
+	optional string app_branch = 4;
+	optional string branch_password_hash = 5;
+}
+
+message CContentServerDirectory_GetManifestRequestCode_Response {
+	optional uint64 manifest_request_code = 1;
+}
+
+// ---- Upstream Steam messages (verbatim from steam-monitor; see header mapping) ----
+
+message CMsgIPAddress {
+    oneof ip {
+        fixed32 v4 = 1;
+        bytes v6 = 2;
+    }
+}
+
+message CMsgGCRoutingProtoBufHeader {
+    optional uint64 dst_gcid_queue = 1;
+    optional uint32 dst_gc_dir_index = 2;
+}
+
+message CMsgProtoBufHeader {
+    optional fixed64 steamid = 1;
+    optional int32 client_sessionid = 2;
+    optional uint32 routing_appid = 3;
+    optional fixed64 jobid_source = 10 [default = 0xffffffffffffffff];
+    optional fixed64 jobid_target = 11 [default = 0xffffffffffffffff];
+    optional string target_job_name = 12;
+    optional int32 seq_num = 24;
+    optional int32 eresult = 13 [default = 2];
+    optional string error_message = 14;
+    optional uint32 auth_account_flags = 16;
+    optional uint32 token_source = 22;
+    optional bool admin_spoofing_user = 23;
+    optional int32 transport_error = 17 [default = 1];
+    optional uint64 messageid = 18 [default = 0xffffffffffffffff];
+    optional uint32 publisher_group_id = 19;
+    optional uint32 sysid = 20;
+    optional uint32 webapi_key_id = 25;
+    optional bool is_from_external_source = 26;
+    repeated uint32 forward_to_sysid = 27;
+    optional uint32 cm_sysid = 28;
+    optional uint32 launcher_type = 31 [default = 0];
+    optional uint32 realm = 32 [default = 0];
+    optional int32 timeout_ms = 33 [default = -1];
+    optional string debug_source = 34;
+    optional uint32 debug_source_string_index = 35;
+    optional uint64 token_id = 36;
+    optional CMsgGCRoutingProtoBufHeader routing_gc = 37;
+
+    optional ESessionDisposition session_disposition = 38 [default = k_ESessionDispositionNormal];
+    enum ESessionDisposition {
+        k_ESessionDispositionNormal = 0;
+        k_ESessionDispositionDisconnect = 1;
+    }
+
+    optional string wg_token = 39;
+    optional string webui_auth_key = 40;
+    repeated int32 exclude_client_sessionids = 41;
+    optional fixed64 admin_request_spoofing_steamid = 43;
+    optional bool is_valveds = 44;
+    optional fixed64 trace_tag = 45;
+
+    oneof ip_addr {
+        uint32 ip = 15;
+        bytes ip_v6 = 29;
+    }
+}
+
+message CMsgClientGamesPlayed {
+    repeated GamePlayed games_played = 1;
+    message GamePlayed {
+        optional uint64 steam_id_gs = 1;
+        optional fixed64 game_id = 2;
+        optional uint32 deprecated_game_ip_address = 3;
+        optional uint32 game_port = 4;
+        optional bool is_secure = 5;
+        optional bytes token = 6;
+        optional string game_extra_info = 7;
+        optional bytes game_data_blob = 8;
+        optional uint32 process_id = 9;
+        optional uint32 streaming_provider_id = 10;
+        optional uint32 game_flags = 11;
+        optional uint32 owner_id = 12;
+        optional string vr_hmd_vendor = 13;
+        optional string vr_hmd_model = 14;
+        optional uint32 launch_option_type = 15 [default = 0];
+        optional int32 primary_controller_type = 16 [default = -1];
+        optional string primary_steam_controller_serial = 17;
+        optional uint32 total_steam_controller_count = 18 [default = 0];
+        optional uint32 total_non_steam_controller_count = 19 [default = 0];
+        optional uint64 controller_workshop_file_id = 20 [default = 0];
+        optional uint32 launch_source = 21 [default = 0];
+        optional uint32 vr_hmd_runtime = 22;
+        optional CMsgIPAddress game_ip_address = 23;
+        optional uint32 controller_connection_type = 24 [default = 0];
+        optional int32 game_os_platform = 25;
+        optional uint32 game_build_id = 26;
+        optional uint32 compat_tool_id = 27 [default = 0];
+        optional string compat_tool_cmd = 28;
+        optional uint32 compat_tool_build_id = 29;
+        optional string beta_name = 30;
+        optional uint32 dlc_context = 31;
+        repeated ProcessInfo process_id_list = 32;
+    }
+
+    optional uint32 client_os_type = 2;
+    optional uint32 cloud_gaming_platform = 3;
+    optional bool recent_reauthentication = 4;
+
+    message ProcessInfo {
+        optional uint32 process_id = 1;
+        optional uint32 process_id_parent = 2;
+        optional bool parent_is_steam = 3;
+    }
+}
+
+message CMsgClientGetAppOwnershipTicket {
+    optional uint32 app_id = 1;
+}
+
+message CMsgClientGetAppOwnershipTicketResponse {
+    optional uint32 eresult = 1 [default = 2];
+    optional uint32 app_id = 2;
+    optional bytes ticket = 3;
+}
+
+message CMsgClientRequestEncryptedAppTicketResponse {
+    optional uint32 app_id = 1;
+    optional int32 eresult = 2 [default = 2];
+    optional EncryptedAppTicket encrypted_app_ticket = 3;
+}
+
+message CMsgClientWalletInfoUpdate {
+    optional bool has_wallet = 1;
+    optional int32 balance = 2;
+    optional int32 currency = 3;
+    optional int32 balance_delayed = 4;
+    optional int64 balance64 = 5;
+    optional int64 balance64_delayed = 6;
+    optional int32 realm = 7;
+}
+
+message CMsgClientEmailAddrInfo {
+    optional string email_address = 1;
+    optional bool email_is_validated = 2;
+    optional bool email_validation_changed = 3;
+    optional bool credential_change_requires_code = 4;
+    optional bool password_or_secretqa_change_requires_code = 5;
+}
+
+message CMsgClientPICSProductInfoRequest {
+    repeated PackageInfo packages = 1;
+    message PackageInfo {
+        optional uint32 packageid = 1;
+        optional uint64 access_token = 2;
+    }
+
+    repeated AppInfo apps = 2;
+    message AppInfo {
+        optional uint32 appid = 1;
+        optional uint64 access_token = 2;
+        optional bool only_public_obsolete = 3;
+    }
+
+    optional bool meta_data_only = 3;
+    optional uint32 num_prev_failed = 4;
+    optional uint32 OBSOLETE_supports_package_tokens = 5;
+    optional uint32 sequence_number = 6;
+    optional bool single_response = 7;
+}
+
+message CMsgClientGetUserStats {
+    optional fixed64 game_id = 1;
+    optional uint32 crc_stats = 2;
+    optional int32 schema_local_version = 3;
+    optional fixed64 steam_id_for_user = 4;
+}
+
+message CMsgClientGetUserStatsResponse {
+    optional fixed64 game_id = 1;
+    optional int32 eresult = 2 [default = 2];
+    optional uint32 crc_stats = 3;
+    optional bytes schema = 4;
+
+    repeated Stats stats = 5;
+    message Stats {
+        optional uint32 stat_id = 1;
+        optional uint32 stat_value = 2;
+    }
+
+    repeated Achievement_Blocks achievement_blocks = 6;
+    message Achievement_Blocks {
+        optional uint32 achievement_id = 1;
+        repeated fixed32 unlock_time = 2;
+    }
+}
+
+// Dependency of CMsgClientRequestEncryptedAppTicketResponse (its encrypted_app_ticket field).
+message EncryptedAppTicket {
+    optional uint32 ticket_version_no = 1;
+    optional uint32 crc_encryptedticket = 2;
+    optional uint32 cb_encrypteduserdata = 3;
+    optional uint32 cb_encrypted_appownershipticket = 4;
+    optional bytes encrypted_ticket = 5;
+}
