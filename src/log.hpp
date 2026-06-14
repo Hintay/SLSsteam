@@ -1,10 +1,13 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
+#include <iomanip>
 #include <memory>
 #include <mutex>
 #include <openssl/sha.h>
@@ -116,7 +119,15 @@ class CLog
 			msgHist.emplace(formatted);
 		}
 
-		ofstream << "[" << logLvlToStr(lvl) << "] " << formatted.c_str();
+		const auto now = std::chrono::system_clock::now();
+		const auto seconds = std::chrono::system_clock::to_time_t(now);
+		const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+		std::tm localTime {};
+		localtime_r(&seconds, &localTime);
+
+		ofstream << "[" << std::put_time(&localTime, "%F %T") << "."
+			<< std::setfill('0') << std::setw(3) << millis << std::setfill(' ')
+			<< "] [" << logLvlToStr(lvl) << "] " << formatted.c_str();
 		if (lvl == LogLevel::NotifyShort || lvl == LogLevel::NotifyLong)
 		{
 			ofstream << "\n";
