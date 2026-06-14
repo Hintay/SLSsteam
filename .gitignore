@@ -12,3 +12,9 @@ zip
 docs/developer/
 docs/superpowers/
 .DS_Store
+
+# protobuf is fetched + built + generated at build time (see Makefile), not committed.
+/third_party/protobuf/
+/obj/proto/
+/tools/protoc
+/lib/libprotobuf-lite.a
