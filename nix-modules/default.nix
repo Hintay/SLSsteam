@@ -20,6 +20,15 @@
     url = "https://www.lua.org/ftp/lua-${luaVersion}.tar.gz";
     sha256 = "4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae";
   };
+
+  # The Makefile fetches the protobuf source at build time; the Nix sandbox has no
+  # network. Pre-fetch the identical tarball. Keep version + hash in sync with
+  # PROTOBUF_VER / PROTOBUF_SHA256 in the Makefile.
+  protobufVersion = "3.15.8";
+  protobufSrc = pkgs.fetchurl {
+    url = "https://github.com/protocolbuffers/protobuf/releases/download/v${protobufVersion}/protobuf-cpp-${protobufVersion}.tar.gz";
+    sha256 = "9b57647b898e45253c98fae35146f6a5e9e788817d29019f9280270c951a0038";
+  };
 in
   pkgs.pkgsi686Linux.stdenv.mkDerivation {
     pname = "SLSsteam";
@@ -29,7 +38,13 @@ in
     nativeBuildInputs = with pkgs; [
       pkg-config
       makeWrapper
+      cmake
     ];
+
+    # cmake is needed only as a build tool for the protobuf sub-build inside the
+    # Makefile. Prevent stdenv from treating this as a CMake project (there is no
+    # CMakeLists.txt at the root).
+    dontUseCmakeConfigure = true;
 
     buildInputs = with pkgs.pkgsi686Linux; [
       openssl
@@ -46,6 +61,11 @@ in
       tar xzf ${luaSrc} -C third_party/lua --strip-components=2 lua-${luaVersion}/src
       rm -f third_party/lua/lua.c third_party/lua/luac.c
       touch third_party/lua/.fetched-${luaVersion}
+
+      # Pre-stage the protobuf source + stamp so make's (network-less) fetch is skipped.
+      mkdir -p third_party/protobuf
+      tar xzf ${protobufSrc} -C third_party/protobuf --strip-components=1 protobuf-${protobufVersion}
+      touch third_party/protobuf/.fetched-${protobufVersion}
 
       # Build the .so targets explicitly: bare `make` would build the smoke-test
       # binary (now the first Makefile target). ticket-grabber is built as its
