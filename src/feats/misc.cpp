@@ -15,7 +15,7 @@ bool Misc::shouldFakeOffline()
 	}
 	
 	const uint32_t appId = FakeAppIds::getRealAppIdForCurrentPipe();
-	if (!appId || !g_config.fakeOffline.get().contains(appId))
+	if (!appId || !g_config.fakeOffline.contains(appId))
 	{
 		return false;
 	}

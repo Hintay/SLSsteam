@@ -483,7 +483,7 @@ bool CConfig::loadSettings()
 
 bool CConfig::isAddedAppId(uint32_t appId)
 {
-	return addedAppIds.get().contains(appId);
+	return addedAppIds.contains(appId);
 }
 
 bool CConfig::shouldExcludeAppId(uint32_t appId)
@@ -497,7 +497,7 @@ bool CConfig::shouldExcludeAppId(uint32_t appId)
 	}
 	else
 	{
-		bool found = appIds.get().contains(appId);
+		bool found = appIds.contains(appId);
 		exclude = !isAddedAppId(appId) && ((useWhiteList.get() && !found) || (!useWhiteList.get() && found));
 	}
 

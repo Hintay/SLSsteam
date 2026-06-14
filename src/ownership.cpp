@@ -60,7 +60,7 @@ bool isControlledApp(uint32_t appId)
 
 bool isYamlAdditionalApp(uint32_t appId)
 {
-	return g_config.yamlAddedAppIds.get().contains(appId) && !LuaLoader::hasOwnedAppId(appId);
+	return g_config.yamlAddedAppIds.contains(appId) && !LuaLoader::hasOwnedAppId(appId);
 }
 
 bool isYamlOnlyAdditionalApp(uint32_t appId)
@@ -75,8 +75,9 @@ bool shouldSpoofOwnership(uint32_t appId)
 
 std::vector<uint32_t> getControlledAppIds()
 {
-	const auto ids = g_config.addedAppIds.get();
-	return {ids.begin(), ids.end()};
+	return g_config.addedAppIds.read([](const auto& ids) {
+		return std::vector<uint32_t>(ids.begin(), ids.end());
+	});
 }
 
 std::unordered_set<uint32_t> getControlledAppIdSet()
@@ -86,9 +87,7 @@ std::unordered_set<uint32_t> getControlledAppIdSet()
 
 uint32_t getPurchaseTime(uint32_t appId)
 {
-	const auto times = g_config.subscriptionTimestamps.get();
-	auto it = times.find(appId);
-	return it != times.end() ? it->second : 0;
+	return g_config.subscriptionTimestamps.getOr(appId, 0u);
 }
 
 } // namespace Ownership
