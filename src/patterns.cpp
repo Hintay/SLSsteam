@@ -371,25 +371,6 @@ namespace Patterns
 		};
 	}
 
-	namespace CAppInfoCache
-	{
-		Pattern_t GetOrAddAppData
-		{
-			"CAppInfoCache::GetOrAddAppData",
-			// 3-arg cdecl entry (pCache, appId, createOrLookupFlag). Same PIC-prologue
-			// shape as GetPackageInfo (E8 thunk; ADD GOT; EBP frame; spill args). The
-			// distinctive tail — sub esp,0x2c; mov esi,[ebp+0xc] (appId); mov edi,[ebp+0x10]
-			// (flag); mov [ebp-0x30],eax; mov eax,[eax+disp] — pins it to a single site
-			// (RE-verified unique on both the 27edb42 and 7c4ac73e builds). The PIC thunk
-			// call, the ADD GOT displacement, AND the final mov's GOT-relative displacement
-			// are wildcarded: that displacement is build-relative and drifted 0x8b0 -> 0x8b4
-			// across a Steam client update, which is what silently broke the old fixed pattern.
-			// See docs/developer/notes/ost-linux-appinfo-cache-hooks.md.
-			"E8 ? ? ? ? 05 ? ? ? ? 55 89 E5 57 56 53 83 EC 2C 8B 75 0C 8B 7D 10 89 45 D0 8B 80 ? ? ? ?",
-			MemHlp::SigFollowMode::None
-		};
-	}
-
 	namespace CConfigStore
 	{
 		Pattern_t SharedConfigWriteCallsite

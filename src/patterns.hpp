@@ -123,11 +123,6 @@ namespace Patterns
 		extern Pattern_t GetPackageInfo;
 	}
 
-	namespace CAppInfoCache
-	{
-		extern Pattern_t GetOrAddAppData;   // 3-arg cdecl appinfo lookup/insert
-	}
-
 	namespace CConfigStore
 	{
 		extern Pattern_t SharedConfigWriteCallsite;

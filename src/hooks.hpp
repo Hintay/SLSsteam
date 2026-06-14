@@ -125,12 +125,6 @@ namespace Hooks
 	typedef void* (*CPackageInfo_GetPackageInfo_t)(void*, uint32_t, uint64_t);
 	extern DetourHook<CPackageInfo_GetPackageInfo_t> CPackageInfo_GetPackageInfo;
 
-	// CAppInfoCache::GetOrAddAppData — 3-arg cdecl (pCache, appId, createOrLookupFlag).
-	// Hooked to mark injected apps' unresolved appinfo as skip (bSkipFlag), so live
-	// license re-eval doesn't choke on them (Task 8 crash fix).
-	typedef void* (*CAppInfoCache_GetOrAddAppData_t)(void*, uint32_t, uint8_t);
-	extern DetourHook<CAppInfoCache_GetOrAddAppData_t> CAppInfoCache_GetOrAddAppData;
-
 	// steamui.so — CSteamUIAppController::GetAppByID and CUpdateManager::MarkAppChange
 	typedef void* (*CSteamUI_GetAppByID_detour_t)(void*, uint32_t, bool);
 	typedef void  (*CUpdateManager_MarkAppChange_detour_t)(void*, uint32_t, uint32_t);
