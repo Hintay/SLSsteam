@@ -5,8 +5,8 @@
 
 
 // In-memory layout of Valve's CUtlMemory/CUtlVector and the DepotEntry
-// records BuildDepotDependency emits. Mirrors OpenSteamTool's Structs.h
-// exactly so the manifest hook can read and patch the depot vector in place.
+// records BuildDepotDependency emits, so the manifest hook can read and patch
+// the depot vector in place.
 
 template<typename T>
 struct CUtlMemory

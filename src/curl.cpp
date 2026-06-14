@@ -98,7 +98,7 @@ int Curl::request(const char* method,
 	curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, writeCallback);
 	curl_easy_setopt(handle, CURLOPT_WRITEDATA, &out);
 
-	// Follow redirects (same behaviour OST WinHttp naturally follows).
+	// Follow redirects.
 	curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1L);
 
 	// Method / body setup.
@@ -140,7 +140,7 @@ int Curl::request(const char* method,
 	else if (res != CURLE_OK)
 	{
 		// Drop the cached easy handle on transport/TLS failures so the next request
-		// rebuilds DNS/TCP/TLS state, matching OST's CloseConnection-on-error model.
+		// rebuilds DNS/TCP/TLS state, closing the connection on transport error.
 		curl_easy_cleanup(s_reusableHandle);
 		s_reusableHandle = nullptr;
 	}

@@ -69,12 +69,12 @@ struct Provider {
     Parser      parse;
 };
 
-// Mirrors OST kProviders exactly: opensteamtool (default), wudrm, steamrun.
-// NOTE: wudrm is plain HTTP and is the provider OST recommends for users in
+// Built-in providers: opensteamtool (default), wudrm, steamrun.
+// NOTE: wudrm is plain HTTP and is the recommended provider for users in
 // China; to force that endpoint without fallback, set `Manifest.Providers: wudrm`.
 static const Provider kProviders[] = {
     { "opensteamtool", "https://manifest.opensteamtool.com/{gid}",      parsePlainUint    },
-    // Plain HTTP is intentional: matches the upstream OST provider URL.
+    // Plain HTTP is intentional: matches the provider's published endpoint URL.
     // The Steam chunk-hash check is the final integrity backstop; do NOT change to https
     // until the endpoint's https support has been verified.
     { "wudrm",         "http://gmrc.wudrm.com/manifest/{gid}",          parsePlainUint    },

@@ -33,7 +33,7 @@ void removeAppAndSendChange(uint32_t appId)
     void* ctrl = g_controller.load(std::memory_order_acquire);
     void* src  = g_appChangeSource.load(std::memory_order_acquire);
     if (!ctrl || !src) return;
-    // Don't clear ownership of apps proven to be genuinely subscribed.
+    // Don't clear ownership of apps confirmed to be genuinely subscribed.
     if (Ownership::isGenuinelyOwned(appId)) return;
     void* app = Hooks::CSteamUIAppController_GetAppByID.tramp.fn(ctrl, appId, false);
     if (!app) return;
@@ -50,7 +50,7 @@ void stampPurchaseTimeIfControlled(void** ppHolder)
 {
     if (!g_config.packageInjection.get()) return;   // feature opt-in: inert when off
     if (!ppHolder) return;
-    void* app = *ppHolder;                       // §7.8: arg3 is void**, deref once
+    void* app = *ppHolder;                       // arg3 is void**, deref once
     if (!app) return;
     uint32_t appId = CSteamApp::appId(app);      // [app+0x0c]
     if (!Ownership::isControlledApp(appId)) return;

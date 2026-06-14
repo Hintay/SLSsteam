@@ -21,8 +21,7 @@
 #include <unordered_set>
 #include <vector>
 
-// Manifest request-code interception at the raw packet layer; see
-// docs/superpowers/notes/pattern-rederivation-runbook.md §2.B.1.
+// Manifest request-code interception at the raw packet layer.
 //
 // Drop the outgoing ContentServerDirectory.GetManifestRequestCode#1 frame so the
 // CM never sees the request, then fabricate the ServiceMethodResponse entirely

@@ -8,8 +8,8 @@
 #include <vector>
 
 // LuaLoader: embedded Lua 5.4 scripting layer for SLSsteam.
-// T1 (skeleton): state tables declared; all bindings are empty stubs.
-// T2: real implementations for download-related bindings + query APIs.
+// Declares the state tables and provides real implementations for the
+// download-related bindings plus the query APIs.
 namespace LuaLoader {
 
     // Manifest GID + content size override for a depot.
@@ -25,9 +25,9 @@ namespace LuaLoader {
     };
 
     // State tables — populated by real binding implementations.
-    // depotKeys mirrors OST DepotKeySet membership semantics: every addappid(id)
-    // creates an entry; an empty vector means the id is configured but no depot
-    // decryption key was supplied.
+    // depotKeys uses membership semantics: every addappid(id) creates an entry;
+    // an empty vector means the id is configured but no depot decryption key was
+    // supplied.
     extern std::unordered_map<uint32_t, std::vector<uint8_t>> depotKeys;
     extern std::unordered_map<uint32_t, ManifestOverride>      manifestOverrides;
     extern std::unordered_set<uint32_t>                        ownedAppIds;
@@ -66,7 +66,7 @@ namespace LuaLoader {
     // Used to let Lua take precedence over yaml AdditionalApps for download policy.
     bool hasOwnedAppId(uint32_t appId);
 
-    // ── Query APIs (T2) ───────────────────────────────────────────────────────
+    // ── Query APIs ────────────────────────────────────────────────────────────
 
     // Returns the 32-byte depot decryption key for depotId, or an empty vector
     // if no key was supplied. Note: depotKeys may still contain an empty marker
@@ -77,7 +77,7 @@ namespace LuaLoader {
     // or nullptr if setmanifestid was not called for that depot.
     std::optional<ManifestOverride> getManifest(uint32_t depotId);
 
-    // Returns the Steam ID associated with appId via setstat (T8).
+    // Returns the Steam ID associated with appId via setstat.
     // Falls back to 76561198028121353 when not set.
     uint64_t getStatSteamId(uint32_t appId);
 
@@ -90,7 +90,7 @@ namespace LuaLoader {
     std::optional<LuaTicket> getEncTicket(uint32_t appId);
 
     // Fetch the manifest request code for (appId, depotId, gid).
-    // Selection order (mirrors OST FetchManifestRequestCode):
+    // Selection order:
     //   1. g_fetchCodeExRef != LUA_NOREF  → call fetch_manifest_code_ex(appId, depotId, gid)
     //   2. g_fetchCodeRef   != LUA_NOREF  → call fetch_manifest_code(gid)
     //   3. fallback                        → ManifestProvider::fetchFromProvider(gid, outCode)

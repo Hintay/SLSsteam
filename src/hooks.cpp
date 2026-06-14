@@ -435,8 +435,7 @@ static bool hkCWebSocketConnection_BBuildAndAsyncSendFrame(void* pThis, int opco
 
 		// achievements: returns true only when it supplies a replacement packet. False
 		// means achievements did not handle the frame; the fallback below sends the
-		// original packet unchanged. Schema sha probes intentionally use that fallback
-		// to match OpenSteamTool.
+		// original packet unchanged. Schema sha probes intentionally use that fallback.
 		const uint8_t* newData = nullptr;
 		uint32_t newSize = 0;
 		bool replace = false;
@@ -587,7 +586,7 @@ static uint32_t hkUser_CheckAppOwnership(void* pClientUser, uint32_t appId, CApp
 
 	// Pump only after the original ownership query has returned. Running Mark/Process before
 	// the original can re-enter Steam's license path while it is still evaluating this query.
-	Package::pumpOnSteamThread("CUser::CheckAppOwnership");   // initial inject + drain lua hot-reload changes, on this Steam thread (§8)
+	Package::pumpOnSteamThread("CUser::CheckAppOwnership");   // initial inject + drain lua hot-reload changes, on this Steam thread
 
 	//Do not log pOwnershipInfo because it gets deleted very quickly, so it's pretty much useless in the logs
 	g_pLog->once
@@ -652,7 +651,7 @@ __attribute__((hot))
 static void* hkCPackageInfo_GetPackageInfo(void* pThis, uint32_t pkgId, uint64_t token)
 {
 	void* ret = Hooks::CPackageInfo_GetPackageInfo.tramp.fn(pThis, pkgId, token);
-	// pkg0 is a stable singleton (proven via frida). Capture once, only when
+	// pkg0 is a stable singleton. Capture once, only when
 	// Available (Status==0), so we never latch a transient/invalid object.
 	if (pkgId == 0 && ret && PackageInfo::status(ret) == 0)
 	{

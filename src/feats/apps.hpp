@@ -17,7 +17,7 @@ namespace Apps
 	bool unlockApp(uint32_t appId, CAppOwnershipInfo* info, uint32_t ownerId);
 	bool unlockApp(uint32_t appId, CAppOwnershipInfo* info);
 
-	// Cache of configured apps that Steam's original ownership path has proven
+	// Cache of configured apps that Steam's original ownership path has confirmed
 	// are genuinely owned. This avoids treating package-injected fake ownership
 	// as real ownership.
 	bool isGenuinelyOwned(uint32_t appId);

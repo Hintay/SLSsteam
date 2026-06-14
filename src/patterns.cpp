@@ -80,8 +80,8 @@ namespace Patterns
 		"LoadDepotDecryptionKey",
 		// Entry of the generic KV value reader Steam uses to load a depot
 		// decryption key (5-arg cdecl: pObject, foo, KeyName, Key, KeySize;
-		// reached via a vtable+0x18 virtual call). This is the function OST hooks
-		// (Hooks_Decryption). The bare prologue (push ebp/edi/esi/ebx) is shared,
+		// reached via a vtable+0x18 virtual call). The bare prologue
+		// (push ebp/edi/esi/ebx) is shared,
 		// so the signature is extended with the distinctive argument-spill
 		// sequence (sub esp,0x24; mov eax,[esp+0x44]; mov ebp,[esp+0x38]; ...)
 		// that resolves to a single location. The PIC thunk call and the
@@ -108,7 +108,7 @@ namespace Patterns
 		"BUpdateAppDownloadPlan",
 		// Internal steamclient helper, unofficial name. Plans or refreshes an
 		// app's depot download/update work and calls BuildDepotDependency.
-		// Entry at RE-verified 00ff3250: PIC thunk; ADD GOT; EBP frame;
+		// Entry at 00ff3250: PIC thunk; ADD GOT; EBP frame;
 		// sub esp,0xdc; spill arg3; read arg1->flags. The PIC thunk call and
 		// GOT displacement are wildcarded.
 		"E8 ? ? ? ? 05 ? ? ? ? 55 89 E5 57 56 53 81 EC DC 00 00 00 89 85 50 FF FF FF 8B 45 10 89 85 40 FF FF FF 8B 45 08 8B 40 04",
@@ -436,7 +436,7 @@ namespace Patterns
 			"CWebSocketConnection::BBuildAndAsyncSendFrame",
 			// Entry: push ebp; mov ebp,esp; push edi; PIC thunk; add edi,GOT; push esi;
 			// push ebx; sub esp,0xac; mov eax,[ebp+0x10] (3rd arg = pubData). PIC call +
-			// GOT displacement wildcarded. Outgoing raw-packet send (OST's manifest hook).
+			// GOT displacement wildcarded. Outgoing raw-packet send.
 			"55 89 E5 57 E8 ? ? ? ? 81 C7 ? ? ? ? 56 53 81 EC AC 00 00 00 8B 45 10",
 			MemHlp::SigFollowMode::None
 		};

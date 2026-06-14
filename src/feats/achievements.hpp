@@ -10,7 +10,7 @@ namespace Achievements
 	// Player.GetUserStats#1 ServiceMethod call (EMsg 151) or a legacy
 	// CMsgClientGetUserStats (EMsg 818) of a redirected app, rewrite the donor
 	// steamid into the request and (151) track jobid_source -> appId. For a 151
-	// schema probe (has sha_schema), default to OpenSteamTool behavior: return false
+	// schema probe (has sha_schema), default behavior: return false
 	// so the raw hook sends the original packet unchanged. If
 	// AchievementsSchemaProbeNoConnection is enabled, drops the probe and later
 	// injects a fabricated no-connection response. If the frame must be re-sent

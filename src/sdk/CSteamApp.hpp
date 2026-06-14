@@ -4,8 +4,7 @@
 #include <cstddef>
 
 // Accessors for steamui.so CSteamUIAppController's app object (returned by
-// GetAppByID). Offsets proven via Deck frida 2026-06-03 (NOT OST's Windows
-// packed layout). Re-derive on a new build.
+// GetAppByID). Offsets observed for this build's layout. Re-derive on a new build.
 namespace CSteamApp {
     static constexpr size_t kAppIdOff     = 0x0c; // AppId_t
     static constexpr size_t kOwnershipOff = 0x18; // EAppOwnershipFlags (OwnsLicense = 0x1)
@@ -21,7 +20,7 @@ namespace CSteamApp {
         *reinterpret_cast<uint32_t*>(reinterpret_cast<char*>(app) + kPurchaseOff) = t;
     }
 
-    // EAppChangeFlags::AddedOrCreated — the change flag Steam itself uses on app add
-    // (proven 2026-06-03). Used by SteamUI::removeAppAndSendChange.
+    // EAppChangeFlags::AddedOrCreated — the change flag Steam itself uses on app add.
+    // Used by SteamUI::removeAppAndSendChange.
     static constexpr uint32_t kEAppChange_AddedOrCreated = 0x0001;
 }

@@ -7,7 +7,7 @@
 #include "ManifestProvider.hpp"
 #include "../filewatcher.hpp"
 
-// Use the raw Lua C API — same approach as OST's LuaConfig.cpp.
+// Use the raw Lua C API.
 // Do NOT use sol2 or any wrapper.
 extern "C" {
 #include <lua.h>
@@ -90,16 +90,15 @@ namespace LuaLoader {
     // may exceed the recv-side wait and fall back to a failed (retryable) install.
     static std::mutex g_luaMtx;
 
-    // ── Lua-dir hot-reload (Spec A) ────────────────────────────────────────
+    // ── Lua-dir hot-reload ─────────────────────────────────────────────────
     // g_luaWatcher watches the scanned lua dirs after init(). g_luaDirs is a
     // process-lifetime store so the const char* paths handed to addDirectory()
-    // stay valid. g_onDepotsChanged is the Spec-B seam (no-op in Spec A).
+    // stay valid. g_onDepotsChanged is an optional notification seam.
     static CFileWatcher* g_luaWatcher = nullptr;
     static std::vector<std::string> g_luaDirs;
     static std::atomic<void (*)()> g_onDepotsChanged{nullptr};
 
     // Case-insensitive function registry: lowercase name → C function.
-    // Mirrors OST LuaConfig.cpp:g_func_registry.
     static std::unordered_map<std::string, lua_CFunction> g_func_registry;
 
     // Lua registry references for callback functions captured via luaL_ref.
@@ -111,7 +110,6 @@ namespace LuaLoader {
     // When a Lua script references an unknown global (e.g. AddAppId),
     // we lower-case the name and look it up in g_func_registry so that
     // any capitalisation variant resolves to the registered function.
-    // Mirrors OST LuaConfig.cpp lines ~117-134.
     static int case_insensitive_index(lua_State* L) {
         const char* name = lua_tostring(L, 2);
         if (!name) {
@@ -302,15 +300,14 @@ namespace LuaLoader {
     // ── Real binding implementations ───────────────────────────────────────
 
     // addappid(id [, dlc_flag [, hex_key]])
-    // Mirrors OST LuaConfig.cpp::lua_addappid, adapted for SLSsteam tables.
     //
     // Arg 1 (required): integer app/depot ID
     // Arg 2 (optional): integer DLC flag (accepted but not stored — kept for
     //                   script compatibility; the flag is Steam-internal info)
     // Arg 3 (optional): 64-hex-char depot decryption key string
     //
-    // On success: inserts id into ownedAppIds and creates depotKeys[id] as an
-    // OST-compatible membership marker. If a valid key is present, the marker is
+    // On success: inserts id into ownedAppIds and creates depotKeys[id] as a
+    // membership marker. If a valid key is present, the marker is
     // overwritten with the 32-byte parsed key; no-key addappid keeps an empty key.
     static int impl_addappid(lua_State* L) {
         int argc = lua_gettop(L);
@@ -347,7 +344,6 @@ namespace LuaLoader {
     }
 
     // addtoken(appid, "decimal_u64_str")
-    // Mirrors OST LuaConfig.cpp::lua_addtoken.
     static int impl_addtoken(lua_State* L) {
         int argc = lua_gettop(L);
         if (argc < 1 || !lua_isinteger(L, 1))
@@ -359,7 +355,7 @@ namespace LuaLoader {
         uint32_t appId = static_cast<uint32_t>(raw);
 
         if (argc < 2)
-            return 0; // token arg omitted — accept silently like OST does
+            return 0; // token arg omitted — accept silently
 
         if (!lua_isstring(L, 2))
             return luaL_error(L, "addtoken: arg2 must be decimal uint64 string");
@@ -376,11 +372,10 @@ namespace LuaLoader {
     }
 
     // setmanifestid(depotId, "gid_str" [, size])
-    // Mirrors OST LuaConfig.cpp::lua_setManifestid, INCLUDING OST's rule that the
-    // size is ALWAYS forced to 0: the GID already pins the exact manifest content,
-    // so a caller-supplied size only changes the download-size *display* and a
-    // wrong value can break Steam's download. The optional 3rd arg is accepted
-    // for script compatibility but ignored.
+    // The size is ALWAYS forced to 0: the GID already pins the exact manifest
+    // content, so a caller-supplied size only changes the download-size *display*
+    // and a wrong value can break Steam's download. The optional 3rd arg is
+    // accepted for script compatibility but ignored.
     static int impl_setmanifestid(lua_State* L) {
         int argc = lua_gettop(L);
         if (argc < 2)
@@ -401,7 +396,7 @@ namespace LuaLoader {
         if (!parseU64Decimal(gidStr, gid))
             return luaL_error(L, "setmanifestid: gid must be all decimal digits");
 
-        // Forced to 0, matching OST — see the function comment above. arg3 ignored.
+        // Forced to 0 — see the function comment above. arg3 ignored.
         const uint64_t size = 0;
 
         FileContribution* contrib = requireParseContribution(L, "setmanifestid");
@@ -413,7 +408,7 @@ namespace LuaLoader {
     }
 
     // fetch_manifest_code(fn)
-    // Captures a Lua function reference in the registry for later invocation (T6).
+    // Captures a Lua function reference in the registry for later invocation.
     static int impl_fetch_manifest_code(lua_State* L) {
         if (lua_gettop(L) < 1 || !lua_isfunction(L, 1))
             return luaL_error(L, "fetch_manifest_code: arg1 must be a function");
@@ -431,7 +426,7 @@ namespace LuaLoader {
     }
 
     // fetch_manifest_code_ex(fn)
-    // Same as fetch_manifest_code but for the extended variant (T6).
+    // Same as fetch_manifest_code but for the extended variant.
     static int impl_fetch_manifest_code_ex(lua_State* L) {
         if (lua_gettop(L) < 1 || !lua_isfunction(L, 1))
             return luaL_error(L, "fetch_manifest_code_ex: arg1 must be a function");
@@ -523,7 +518,7 @@ namespace LuaLoader {
         return 2;
     }
 
-    // ── Hex helper for variable-length tickets (T7) ───────────────────────
+    // ── Hex helper for variable-length tickets ────────────────────────────
 
     // Parse a hex string of arbitrary even length into a byte vector.
     // Returns false and leaves out unchanged if the string is malformed
@@ -543,13 +538,13 @@ namespace LuaLoader {
         return true;
     }
 
-    // ── T7: setappticket / seteticket real implementations ────────────────
+    // ── setappticket / seteticket real implementations ────────────────────
 
     // setappticket(appid, "hex_ticket")
     // Decodes hex ticket bytes, extracts SteamID AccountID from offset 8,
     // and stores in the in-memory appTickets map.
     //
-    // App ownership ticket layout (OST AppTicket.cpp::GetSpoofSteamID):
+    // App ownership ticket layout:
     //   [uint32 Size][uint32 Version][uint64 SteamID][...]
     //   SteamID lives at byte offset 8; we take the low 32 bits as AccountID.
     // Minimum bytes required: 16 (to cover offset 8 + 8 bytes of SteamID).
@@ -635,12 +630,12 @@ namespace LuaLoader {
         return 0;
     }
 
-    // ── setstat real implementation (T8) ─────────────────────────────────
+    // ── setstat real implementation ───────────────────────────────────────
 
     // setstat(appid, "steamid_decimal")
     // Associates a 64-bit Steam ID with an app so that Achievements::sendMessage
     // redirects Player.GetUserStats / CMsgClientGetUserStats queries for that app
-    // to the given Steam ID. Mirrors OST LuaConfig.cpp::lua_setstat.
+    // to the given Steam ID.
     //
     // Arg 1 (required): integer appId
     // Arg 2 (required): decimal uint64 string Steam ID (e.g. "76561198028121353")
@@ -672,7 +667,7 @@ namespace LuaLoader {
         return 0;
     }
 
-    // ── Stub binding implementations (T9 — do not implement here) ─────
+    // ── Stub binding implementations (not implemented here) ───────────
     static int stub_downloadapp(lua_State*)                { return 0; }
     static int stub_addnonowneddepot(lua_State*)           { return 0; }
     static int stub_setnotifyondownloadcomplete(lua_State*) { return 0; }
@@ -763,7 +758,7 @@ namespace LuaLoader {
     // Parse one .lua file line-by-line, accumulating into a chunk until it
     // compiles, then executing it. A genuine syntax error logs + skips that
     // statement (does NOT discard the rest of the file); a multi-line statement
-    // (luaL_loadstring reports "<eof>") keeps accumulating. Mirrors OST ParseFile.
+    // (luaL_loadstring reports "<eof>") keeps accumulating.
     static void parseLuaFile(const std::string& filePath) {
         if (!g_lua) {
             g_pLog->warn("LuaLoader: parseLuaFile called before init()\n");
@@ -866,13 +861,13 @@ namespace LuaLoader {
         }
     }
 
-    // ── Lua-dir hot-reload callback (Spec A) ───────────────────────────────
+    // ── Lua-dir hot-reload callback ────────────────────────────────────────
     void onDepotsChanged() { if (auto fn = g_onDepotsChanged.load()) fn(); }
     void setOnDepotsChanged(void (*fn)()) { g_onDepotsChanged.store(fn); }
 
     // FileWatcher callback (runs on the FileWatcher thread). Reparse the changed
     // .lua under BOTH locks (lua VM + file tables), then reconcile g_config and
-    // fire the Spec-B seam. No-op until init() has finished building the tables.
+    // fire the depots-changed seam. No-op until init() has finished building the tables.
     static void onLuaFileChanged(const std::string& path, uint32_t mask) {
         if (!initDone()) return;
         if (path.size() < 4 || path.compare(path.size() - 4, 4, ".lua") != 0) return;
@@ -915,7 +910,6 @@ namespace LuaLoader {
         luaL_openlibs(g_lua);
 
         // Install case-insensitive __index on _G's metatable.
-        // Mirrors OST LuaConfig.cpp:Initialize() lines ~386-393.
         lua_getglobal(g_lua, "_G");
         if (!lua_getmetatable(g_lua, -1)) {
             lua_newtable(g_lua); // Push a fresh metatable.
@@ -925,8 +919,8 @@ namespace LuaLoader {
         lua_setmetatable(g_lua, -2);
         lua_pop(g_lua, 1); // Pop _G.
 
-        // Register all bindings. T2, T6, T7 and T8 functions are real;
-        // T9 (downloadapp/addnonowneddepot/setnotifyondownloadcomplete/setstpropertyforaccount) remain stubs.
+        // Register all bindings. Most functions are real;
+        // downloadapp/addnonowneddepot/setnotifyondownloadcomplete/setstpropertyforaccount remain stubs.
         register_func(g_lua, "addappid",                    impl_addappid);
         register_func(g_lua, "addtoken",                    impl_addtoken);
         register_func(g_lua, "setmanifestid",               impl_setmanifestid);
@@ -961,7 +955,7 @@ namespace LuaLoader {
             scanDirectory(userLuaDir);
         }
 
-        // 3. Extra directories from yaml Lua.Paths[] — wired in T9.
+        // 3. Extra directories from yaml Lua.Paths[].
         //    These are scanned after the built-in dirs so they can override entries.
         {
             const auto extraDirs = g_config.luaPaths.get();
@@ -1033,7 +1027,6 @@ namespace LuaLoader {
     }
 
     // Default Steam ID used when setstat has not been called for an app.
-    // Matches the value specified in the T2 task description.
     static constexpr uint64_t kDefaultStatSteamId = 76561198028121353ULL;
 
     uint64_t getStatSteamId(uint32_t appId) {
@@ -1044,7 +1037,7 @@ namespace LuaLoader {
     }
 
     // ── fetchManifestCode ─────────────────────────────────────────────────
-    // Mirrors OST ManifestClient::FetchManifestRequestCode selection order.
+    // Tries the lua-provided callbacks first, then the built-in HTTP provider.
 
     // Helper: read the top Lua value as a non-zero uint64.
     // Accepts integers and decimal strings (Lua scripts may return either).

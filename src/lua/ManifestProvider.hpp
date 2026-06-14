@@ -5,7 +5,7 @@
 #include <vector>
 
 // Built-in HTTP providers for manifest request-code lookup.
-// Mirrors OST ManifestClient.cpp / kProviders model. Built-ins: opensteamtool / wudrm / steamrun.
+// Built-ins: opensteamtool / wudrm / steamrun.
 //
 // The chain is selected from yaml `Manifest.Providers` in config.cpp:loadSettings(), which accepts
 // either a single scalar (`Providers: wudrm`) or a list (`Providers: [opensteamtool, wudrm, ...]`).

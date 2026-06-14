@@ -82,7 +82,7 @@ namespace Hooks
 	typedef void(*IClientUserStats_RunIPCFrame_t)(void*, void*, void*, void*);
 
 	// 5-arg cdecl generic KV value reader (pObject, foo, KeyName, Key, KeySize),
-	// returns bytes written. Steam's depot-key loader; the one OST hooks.
+	// returns bytes written. Steam's depot-key loader.
 	typedef int(*LoadDepotDecryptionKey_t)(void*, uint32_t, char*, char*, uint32_t);
 
 	// 8-arg cdecl. arg4 (pDepotInfo) is a CUtlVector<DepotEntry>*; typed as void*

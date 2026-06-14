@@ -21,7 +21,7 @@ namespace {
     std::mutex         g_injectMtx;   // guards pkg0 mutation and cross-thread pending-change queues
     // Set by notifyLicenseChanged (lua FileWatcher thread); drained by
     // pumpOnSteamThread (Steam thread) so the actual pkg0 mutation + Mark/Process
-    // never runs on the foreign FileWatcher thread (§8 cross-thread race → crash).
+    // never runs on the foreign FileWatcher thread (cross-thread race → crash).
     std::atomic<bool>  g_pendingChange{false};
     std::vector<uint32_t> g_pendingConfigAdditions;
     std::vector<uint32_t> g_pendingConfigRemovals;
@@ -138,9 +138,9 @@ static bool appendAppIdGrowing(CUtlVector<uint32_t>* vec, uint32_t appId)
     if (!Hooks::oCUtlMemoryGrow) return false;
     // NOTE: Grow triggers a realloc that frees the old m_pMemory; Steam threads
     // reading AppIdVec lock-free during this window risk a use-after-free — an
-    // escalation over the §8 in-place-write race (which only risks a stale value).
+    // escalation over the in-place-write race (which only risks a stale value).
     // Accepted per architecture; grow only fires when the lua set exceeds the
-    // initial spare (~10). Monitor the grow path during Deck validation (Task 8).
+    // initial spare (~10). Monitor the grow path during Deck validation.
     Hooks::oCUtlMemoryGrow(&vec->m_Memory, kAppIdVecGrowBatch); // grow by a batch (amortize)
     return appendAppIdInPlace(vec, appId);              // retry after grow
 }
@@ -176,8 +176,8 @@ static bool markAndProcess(const char* source)
             reinterpret_cast<void*>(Hooks::oProcessPendingLicenseUpdates));
         return false;
     }
-    // §8 (proven 2026-06-03 Task 8): Mark/Process mutate the CUser license table
-    // that Steam's own threads walk. Doing this from the foreign FileWatcher thread
+    // Mark/Process mutate the CUser license table that Steam's own threads walk.
+    // Doing this from the foreign FileWatcher thread
     // corrupted Steam and crashed the IPC thread (SIGSEGV). Both injection paths now
     // run on a Steam thread via pumpOnSteamThread. The PackageInjection config gate
     // remains the kill switch.
@@ -237,8 +237,8 @@ void tryInitFakeLicenseOnce(const char* source)
 }
 
 // Apply queued config/lua hot-reload add/removes to pkg0 + live re-evaluate. MUST
-// run on a Steam thread (§8): doing this from the foreign FileWatcher thread races
-// Steam's license/IPC threads and corrupts them (proven SIGSEGV, Task 8). Only
+// run on a Steam thread: doing this from the foreign FileWatcher thread races
+// Steam's license/IPC threads and corrupts them (observed SIGSEGV). Only
 // reached via pumpOnSteamThread after g_active, so pkg0 is captured and injected.
 static void applyPendingChanges(const char* source)
 {
@@ -311,7 +311,7 @@ static void applyPendingChanges(const char* source)
 }
 
 // onDepotsChanged callback — runs on the lua FileWatcher thread. Do NOT touch pkg0
-// / Mark/Process here (§8 cross-thread race → crash). Just signal; pumpOnSteamThread
+// / Mark/Process here (cross-thread race → crash). Just signal; pumpOnSteamThread
 // drains it on a Steam thread.
 void notifyLicenseChanged()
 {

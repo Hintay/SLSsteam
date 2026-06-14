@@ -43,7 +43,7 @@ namespace VFTIndexes
 		// store, which would normally flush cloudenabled into the cloud-synced sharedconfig.vdf;
 		// SLSsteam strips only its own injected cloudenabled entries at CConfigStore::WriteVdfFile
 		// before Steam writes that serialized UserRoamingConfigStore buffer. idx confirmed via
-		// frida (UI switch fired slot 25).
+		// observed: UI switch fires slot 25.
 		constexpr int SetCloudEnabledForApp = 25;
 	}
 

@@ -27,18 +27,18 @@
 //   2. Legacy client message (EMsg 818/819): CMsgClientGetUserStats
 //
 // The ServiceMethod (151/147) path does NOT traverse CProtoBufMsgBase::Send/
-// InitFromPacket on modern Steam (proven during the requestcode work — outgoing 151
-// never reached that hook), so achievements is intercepted here at the raw layer:
+// InitFromPacket on modern Steam (outgoing 151 never reached that hook), so
+// achievements is intercepted here at the raw layer:
 //   outgoing CWebSocketConnection::BBuildAndAsyncSendFrame
 //   incoming CCMConnection::RecvPkt(CNetPacket*)
 //
 // For added (lua/config) apps that are not genuinely owned, the outgoing query's
 // steamid is rewritten to a donor so the server returns a valid schema; incoming
 // stat values are then cleared so Steam keeps the schema but falls back to local
-// cache. sha_schema probes default to OpenSteamTool behavior (send unchanged);
+// cache. sha_schema probes default behavior is to send unchanged;
 // AchievementsSchemaProbeNoConnection restores the older drop+fabricated
-// no-connection path for A/B testing. Redirect only controlled apps that have not
-// been proven genuinely owned by Steam's original ownership path. Do not use
+// no-connection path. Redirect only controlled apps that have not
+// been confirmed genuinely owned by Steam's original ownership path. Do not use
 // CUser::isSubscribed() here: package injection can make fake ownership look
 // subscribed and would exclude exactly the apps that need redirecting.
 

@@ -4,8 +4,8 @@
 #include <cstdint>
 
 // In-memory accessors for Steam's PackageInfo (steamclient.so). We do NOT model
-// the full struct (intermediate fields unknown); only the offsets proven by Deck
-// frida on build 64b86a11 are exposed. Re-derive offsets on a new build.
+// the full struct (intermediate fields unknown); only the offsets observed on
+// build 64b86a11 are exposed. Re-derive offsets on a new build.
 
 #if defined(__i386__) || defined(_M_IX86)
 // Offsets above assume Valve's 32-bit CUtlMemory layout (m_pMemory@0, alloc@4, grow@8 = 12 bytes).
