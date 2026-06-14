@@ -5,7 +5,9 @@
 CXX := g++
 CC := gcc
 
-libs := $(wildcard lib/*.a)
+# libprotobuf-lite.a is built at build time (not present at parse time on a clean
+# checkout), so list it explicitly; wildcard covers only the committed prebuilt libs.
+libs := $(filter-out lib/libprotobuf-lite.a,$(wildcard lib/*.a)) $(PROTOBUF_LITE_A)
 srcs := $(shell find src/ -type f -iname "*.cpp")
 objs := $(srcs:src/%.cpp=obj/%.o)
 deps := $(objs:%.o=%.d)
@@ -44,6 +46,10 @@ lua_objs   := $(lua_names:%=obj/luavendor/%.o)
 
 CXXFLAGS := -O3 -flto=auto -fPIC -m32 -std=c++20 -Wall -Wextra -Wpedantic -Wno-error=format-security -D_GLIBCXX_USE_CXX11_ABI=0
 CXXFLAGS += -Ithird_party/lua
+# protobuf headers come from the fetched source tree (the vendored include/google/
+# tree is removed). Keep -isystem include for base64/libmem/yaml-cpp headers.
+CXXFLAGS += -isystem $(PROTOBUF_DIR)/src
+CXXFLAGS += -Iobj/proto
 
 LDFLAGS := -shared -Wl,--no-undefined
 LDFLAGS += $(shell pkg-config --libs "openssl")
@@ -144,6 +150,20 @@ $(PROTOBUF_LITE_A): $(PROTOBUF_STAMP)
 	cmake --build "$(PROTOBUF_DIR)/build-lite32" --target libprotobuf-lite -j
 	cp "$(PROTOBUF_DIR)/build-lite32/libprotobuf-lite.a" "$(PROTOBUF_LITE_A)"
 
+# Generate the single curated schema at build time. No .pb.cc -> .pb.cpp rename:
+# the generated .cc is compiled directly by an explicit rule below.
+proto_src := src/sdk/protobufs/slssteam_messages.proto
+proto_gen := obj/proto/slssteam_messages.pb.cc
+proto_obj := obj/proto/slssteam_messages.pb.o
+
+$(proto_gen): $(proto_src) | $(PROTOC)
+	@mkdir -p obj/proto
+	$(PROTOC) --cpp_out=lite:obj/proto -I src/sdk/protobufs $<
+
+$(proto_obj): $(proto_gen)
+	@mkdir -p obj/proto
+	$(CXX) $(CXXFLAGS) -isysteminclude -c $< -o $@
+
 # The unpacked .c files are produced by the fetch step (order-only: the stamp's
 # mtime must not force a rebuild of every object).
 $(LUA_DIR)/%.c: | $(LUA_STAMP) ;
@@ -163,9 +183,10 @@ $(lua_a): $(lua_objs)
 # Project sources compile with -I$(LUA_DIR) and some #include <lua.h>, so every
 # object must wait for the lua fetch/extract. Order-only (|): the stamp's mtime
 # must not force a full rebuild of the tree.
-$(objs): | $(LUA_STAMP)
+$(objs): | $(LUA_STAMP) $(PROTOBUF_STAMP)
+$(proto_obj): | $(PROTOBUF_STAMP)
 
-bin/SLSsteam.so: $(objs) $(lua_a) $(libs)
+bin/SLSsteam.so: $(objs) $(proto_obj) $(lua_a) $(PROTOBUF_LITE_A) $(libs)
 	@mkdir -p bin
 	$(CXX) $(CXXFLAGS) $^ -o bin/SLSsteam.so $(LDFLAGS)
 
