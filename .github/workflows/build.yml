@@ -39,10 +39,19 @@ jobs:
           dpkg --add-architecture i386
           apt-get update
           apt-get install -y --no-install-recommends \
-            g++ g++-multilib make pkg-config git curl ca-certificates \
+            g++ g++-multilib make cmake pkg-config git curl ca-certificates \
             libssl-dev:i386 libcurl4-openssl-dev:i386
 
       - uses: actions/checkout@v4
+
+      - name: Cache protobuf toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            tools/protoc
+            lib/libprotobuf-lite.a
+            third_party/protobuf
+          key: protobuf-${{ runner.os }}-3.15.8-${{ hashFiles('src/sdk/protobufs/slssteam_messages.proto', 'Makefile') }}
 
       - name: Build
         env:
@@ -125,7 +134,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install base-devel
-        run: pacman -Syu --noconfirm --needed base-devel git sudo
+        run: pacman -Syu --noconfirm --needed base-devel cmake git sudo
 
       - uses: actions/checkout@v4
 
