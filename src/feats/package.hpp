@@ -34,11 +34,11 @@ namespace Package {
     // One-shot: inject the reconciled AdditionalApps set into pkg0 + Mark/Process.
     // Safe to call repeatedly; only runs once when pkg0+CUser captured and
     // Status==Available.
-    void tryInitFakeLicenseOnce();
+    void tryInitFakeLicenseOnce(const char* source);
 
     // Called from a Steam thread (hkUser_CheckAppOwnership). Runs the one-shot
     // initial injection, then drains pending lua/yaml hot-reload changes — keeping
     // ALL Steam-table mutation on the Steam thread (§8: doing it on the foreign
     // FileWatcher thread crashes Steam).
-    void pumpOnSteamThread();
+    void pumpOnSteamThread(const char* source);
 }

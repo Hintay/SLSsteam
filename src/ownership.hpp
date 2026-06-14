@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <unordered_set>
 #include <vector>
 
 namespace Ownership {
@@ -19,6 +20,9 @@ namespace Ownership {
 	void setGenuinelyOwned(uint32_t appId, bool owned);
 
 	std::vector<uint32_t> getControlledAppIds();
+	// One snapshot of the controlled-app set for batched membership tests, so a
+	// loop does not pay a full set copy per id (MTVariable::get copies on each call).
+	std::unordered_set<uint32_t> getControlledAppIdSet();
 	uint32_t getPurchaseTime(uint32_t appId);
 
 } // namespace Ownership

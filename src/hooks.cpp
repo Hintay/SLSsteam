@@ -587,7 +587,7 @@ static uint32_t hkUser_CheckAppOwnership(void* pClientUser, uint32_t appId, CApp
 
 	// Pump only after the original ownership query has returned. Running Mark/Process before
 	// the original can re-enter Steam's license path while it is still evaluating this query.
-	Package::pumpOnSteamThread();   // initial inject + drain lua hot-reload changes, on this Steam thread (§8)
+	Package::pumpOnSteamThread("CUser::CheckAppOwnership");   // initial inject + drain lua hot-reload changes, on this Steam thread (§8)
 
 	//Do not log pOwnershipInfo because it gets deleted very quickly, so it's pretty much useless in the logs
 	g_pLog->once
@@ -629,7 +629,7 @@ static uint32_t hkUser_GetSubscribedApps(void* pClientUser, uint32_t* pAppList, 
 	// This path is a more reliable Steam-thread touchpoint than CheckAppOwnership on some
 	// SteamUI flows. Keep it post-original for the same re-entrancy reason as above.
 	Package::setCUser(pClientUser);
-	Package::pumpOnSteamThread();
+	Package::pumpOnSteamThread("CUser::GetSubscribedApps");
 
 	Apps::getSubscribedApps(pAppList, size, count);
 
@@ -663,7 +663,7 @@ static void* hkCPackageInfo_GetPackageInfo(void* pThis, uint32_t pkgId, uint64_t
 		// touchpoint that provides pkg0, and CUser is already captured by now — so the
 		// one-shot injection actually completes. Runs on a Steam thread; ThreadPumpGuard
 		// makes the re-entrancy from ProcessPendingLicenseUpdates safe.
-		Package::pumpOnSteamThread();
+		Package::pumpOnSteamThread("CPackageInfo::GetPackageInfo");
 	}
 	return ret;
 }

@@ -22,6 +22,11 @@ bool isGenuinelyOwned(uint32_t appId)
 
 void setGenuinelyOwned(uint32_t appId, bool owned)
 {
+	if (owned && !isControlledApp(appId))
+	{
+		return;
+	}
+
 	std::lock_guard<std::mutex> lock(g_realOwnedMtx);
 	if (owned)
 	{
@@ -72,6 +77,11 @@ std::vector<uint32_t> getControlledAppIds()
 {
 	const auto ids = g_config.addedAppIds.get();
 	return {ids.begin(), ids.end()};
+}
+
+std::unordered_set<uint32_t> getControlledAppIdSet()
+{
+	return g_config.addedAppIds.get();
 }
 
 uint32_t getPurchaseTime(uint32_t appId)
