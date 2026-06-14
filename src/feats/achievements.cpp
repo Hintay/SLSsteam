@@ -6,8 +6,7 @@
 #include "../sdk/CProtoBufMsgBase.hpp"   // EMsgType enum + CMsgProtoBufHeader
 #include "../sdk/EResult.hpp"
 #include "../sdk/RawNetPacket.hpp"
-#include "../sdk/protobufs/slssteam_servicemethods.pb.h"
-#include "../sdk/protobufs/steammessages_clientserver_userstats.pb.h"
+#include "slssteam_messages.pb.h"
 
 #include "../lua/LuaLoader.hpp"
 #include "../log.hpp"

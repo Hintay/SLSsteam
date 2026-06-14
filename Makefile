@@ -183,7 +183,9 @@ $(lua_a): $(lua_objs)
 # Project sources compile with -I$(LUA_DIR) and some #include <lua.h>, so every
 # object must wait for the lua fetch/extract. Order-only (|): the stamp's mtime
 # must not force a full rebuild of the tree.
-$(objs): | $(LUA_STAMP) $(PROTOBUF_STAMP)
+# proto_gen (slssteam_messages.pb.h) must also be present before any source
+# that transitively includes it via CProtoBufMsgBase.hpp.
+$(objs): | $(LUA_STAMP) $(PROTOBUF_STAMP) $(proto_gen)
 $(proto_obj): | $(PROTOBUF_STAMP)
 
 bin/SLSsteam.so: $(objs) $(proto_obj) $(lua_a) $(PROTOBUF_LITE_A) $(libs)

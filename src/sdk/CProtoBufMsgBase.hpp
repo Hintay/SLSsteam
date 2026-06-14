@@ -1,12 +1,6 @@
 #pragma once
 
-#include "protobufs/steammessages_base.pb.h"
-#include "protobufs/encrypted_app_ticket.pb.h"
-#include "protobufs/steammessages_clientserver.pb.h"
-#include "protobufs/steammessages_clientserver_2.pb.h"
-#include "protobufs/steammessages_clientserver_appinfo.pb.h"
-#include "protobufs/steammessages_clientserver_friends.pb.h"
-#include "protobufs/steammessages_clientserver_userstats.pb.h"
+#include "slssteam_messages.pb.h"
 
 #include <cstdint>
 
